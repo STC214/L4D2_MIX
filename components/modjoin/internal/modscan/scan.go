@@ -66,17 +66,17 @@ var archiveChunkName = regexp.MustCompile(`(?i)_\d{3}\.vpk$`)
 var categoryOrder = []struct {
 	key, output, title string
 }{
-	{"ui", "01_UI_HUD.vpk", "Merged UI and HUD"},
-	{"survivors", "02_Survivors.vpk", "Merged Survivor Models"},
-	{"infected", "03_Infected.vpk", "Merged Infected Models"},
-	{"weapons", "04_Weapons.vpk", "Merged Weapons"},
-	{"environment", "05_Environment.vpk", "Merged Environment"},
-	{"effects", "06_Effects.vpk", "Merged Visual Effects"},
-	{"audio", "07_Audio.vpk", "Merged Audio"},
-	{"gameplay", "08_Gameplay.vpk", "Merged Gameplay Scripts"},
-	{"sprays", "09_Sprays.vpk", "Merged Sprays"},
-	{"maps", "10_Maps.vpk", "Merged Maps and Campaigns"},
-	{"misc", "11_Misc.vpk", "Merged Miscellaneous"},
+	{"ui", "【01】UI_HUD.vpk", "Merged UI and HUD"},
+	{"survivors", "【02】Survivors.vpk", "Merged Survivor Models"},
+	{"infected", "【03】Infected.vpk", "Merged Infected Models"},
+	{"weapons", "【04】Weapons.vpk", "Merged Weapons"},
+	{"environment", "【05】Environment.vpk", "Merged Environment"},
+	{"effects", "【06】Effects.vpk", "Merged Visual Effects"},
+	{"audio", "【07】Audio.vpk", "Merged Audio"},
+	{"gameplay", "【08】Gameplay.vpk", "Merged Gameplay Scripts"},
+	{"sprays", "【09】Sprays.vpk", "Merged Sprays"},
+	{"maps", "【10】Maps.vpk", "Merged Maps and Campaigns"},
+	{"misc", "【11】Misc.vpk", "Merged Miscellaneous"},
 }
 
 func Scan(directory string) (Result, error) {

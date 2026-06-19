@@ -1,16 +1,26 @@
 package modscan
 
 import (
+	"regexp"
 	"testing"
 
 	"l4d2-mod-join/internal/vpkmerge"
 )
 
+func TestDefaultCategoryOutputsUseBracketedNumbers(t *testing.T) {
+	pattern := regexp.MustCompile(`^【\d{2}】.+\.vpk$`)
+	for _, definition := range categoryOrder {
+		if !pattern.MatchString(definition.output) {
+			t.Fatalf("category %q output = %q, want 【NN】Name.vpk", definition.key, definition.output)
+		}
+	}
+}
+
 func TestPlanRequiresExplicitConflictSelection(t *testing.T) {
 	result := Result{
 		Directory: "mods",
 		Categories: []Category{{
-			Key: "misc", Output: "11_Misc.vpk", Title: "Misc",
+			Key: "misc", Output: "【11】Misc.vpk", Title: "Misc",
 			Packages: []string{"a.vpk", "b.vpk"},
 		}},
 		Conflicts: []Conflict{{
@@ -71,7 +81,7 @@ func TestConflictGroupingReducesRepeatedChoices(t *testing.T) {
 
 func TestMiscPackagesStayInOneOutputGroup(t *testing.T) {
 	result := Result{Categories: []Category{{
-		Key: "misc", Output: "11_Misc.vpk", Title: "Misc",
+		Key: "misc", Output: "【11】Misc.vpk", Title: "Misc",
 		Packages: []string{"one.vpk", "two.vpk", "three.vpk"},
 	}}}
 	plan, err := result.Plan("out", nil)

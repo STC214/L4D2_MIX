@@ -28,6 +28,10 @@ type deploymentRegistry struct {
 }
 
 var legacyManagedOutputs = []string{
+	"【01】UI_HUD.vpk", "【02】Survivors.vpk", "【03】Infected.vpk", "【04】Weapons.vpk",
+	"【05】Environment.vpk", "【06】Effects.vpk", "【07】Audio.vpk", "【08】Gameplay.vpk",
+	"【09】Sprays.vpk", "【10】TUMTaRA.vpk", "【10】Maps.vpk", "【11】AlwaysToast_LDR.vpk",
+	"【11】Misc.vpk", "【12】Training_Map.vpk",
 	"01_UI_HUD.vpk", "02_Survivors.vpk", "03_Infected.vpk", "04_Weapons.vpk",
 	"05_Environment.vpk", "06_Effects.vpk", "07_Audio.vpk", "08_Gameplay.vpk",
 	"09_Sprays.vpk", "10_TUMTaRA.vpk", "10_Maps.vpk", "11_AlwaysToast_LDR.vpk",

@@ -4,7 +4,7 @@
 
 - `Left4Dead2-Autobhop_VPK_W`：窗口选择、偏移配置、自动探测、启动/停止和实时状态。
 - `L4D2RowFilterManager.exe`：规则编辑、恢复默认、启动并注入、注入运行中的游戏、日志与组件目录。
-- `L4D2_MOD_JOIN`：VPK 动态扫描分类、冲突处理、分类合并、安全部署和还原。
+- `L4D2_MOD_JOIN`：VPK 动态扫描分类、冲突处理、分类合并、安全部署和还原。分类输出包使用 `【01】UI_HUD.vpk`、`【02】Survivors.vpk` 这样的括号编号格式。
 
 ## 使用
 
