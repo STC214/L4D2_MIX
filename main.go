@@ -1004,7 +1004,7 @@ func minimizeToTray() {
 
 func restoreFromTray() {
 	deleteTrayIcon()
-	procShowWindow.Call(app.hwnd, SW_RESTORE)
+	procShowWindow.Call(app.hwnd, SW_MAXIMIZE)
 	refreshAfterRestore()
 	procSetForegroundWindow.Call(app.hwnd)
 }

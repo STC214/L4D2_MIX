@@ -347,6 +347,7 @@ func buildConflictGroups(result *Result) []ConflictGroup {
 func recommendGroup(group ConflictGroup, infos map[string]vpkmerge.PackageInfo) (string, string, bool) {
 	type score struct {
 		name      string
+		priority  int
 		fileCount int
 		covers    int
 	}
@@ -363,9 +364,16 @@ func recommendGroup(group ConflictGroup, infos map[string]vpkmerge.PackageInfo) 
 				covers++
 			}
 		}
-		scores = append(scores, score{name: name, fileCount: len(info.Files), covers: covers})
+		category := classify(info)
+		scores = append(scores, score{
+			name: name, priority: recommendationPriority(category),
+			fileCount: len(info.Files), covers: covers,
+		})
 	}
 	sort.Slice(scores, func(i, j int) bool {
+		if scores[i].priority != scores[j].priority {
+			return scores[i].priority > scores[j].priority
+		}
 		if scores[i].covers != scores[j].covers {
 			return scores[i].covers > scores[j].covers
 		}
@@ -380,6 +388,10 @@ func recommendGroup(group ConflictGroup, infos map[string]vpkmerge.PackageInfo) 
 	recommended := scores[0].name
 	reason := fmt.Sprintf("推荐保留 %s：它在该冲突组中资源更完整（共 %d 个包内文件）。",
 		recommended, scores[0].fileCount)
+
+	if scores[0].priority > 0 {
+		reason = fmt.Sprintf("推荐保留 %s：角色/武器类 MOD 优先，随后再按冲突覆盖数和包内文件数排序。", recommended)
+	}
 
 	// A strict superset is safe to resolve automatically: every runtime file
 	// from the smaller package is already present in the larger package.
@@ -396,6 +408,15 @@ func recommendGroup(group ConflictGroup, infos map[string]vpkmerge.PackageInfo) 
 		return recommended, "自动处理：该 MOD 完整包含其他竞争 MOD 的全部运行时资源。", true
 	}
 	return recommended, reason, false
+}
+
+func recommendationPriority(category string) int {
+	switch category {
+	case "survivors", "infected", "weapons":
+		return 100
+	default:
+		return 0
+	}
 }
 
 func filePathSet(info vpkmerge.PackageInfo) map[string]bool {

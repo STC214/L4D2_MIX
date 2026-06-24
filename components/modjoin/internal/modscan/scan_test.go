@@ -2,6 +2,7 @@ package modscan
 
 import (
 	"regexp"
+	"strings"
 	"testing"
 
 	"l4d2-mod-join/internal/vpkmerge"
@@ -76,6 +77,54 @@ func TestConflictGroupingReducesRepeatedChoices(t *testing.T) {
 	}
 	if result.Conflicts[0].AutoWinner != "b.vpk" || result.Conflicts[1].AutoWinner != "b.vpk" {
 		t.Fatal("auto winner was not propagated to grouped conflicts")
+	}
+}
+
+func TestCharacterAndWeaponRecommendationsWinOverGenericPackages(t *testing.T) {
+	group := ConflictGroup{
+		Packages: []string{"generic.vpk", "survivor.vpk", "weapon.vpk"},
+		Paths:    []string{"materials/shared/conflict.vtf"},
+	}
+	infos := map[string]vpkmerge.PackageInfo{
+		"generic.vpk": {Path: "generic.vpk", Files: []vpkmerge.FileInfo{
+			{Path: "materials/shared/conflict.vtf"},
+			{Path: "materials/shared/extra_a.vtf"},
+			{Path: "materials/shared/extra_b.vtf"},
+			{Path: "materials/shared/extra_c.vtf"},
+		}},
+		"survivor.vpk": {Path: "survivor.vpk", Files: []vpkmerge.FileInfo{
+			{Path: "materials/shared/conflict.vtf"},
+			{Path: "models/survivors/survivor_test.mdl"},
+		}},
+		"weapon.vpk": {Path: "weapon.vpk", Files: []vpkmerge.FileInfo{
+			{Path: "materials/shared/conflict.vtf"},
+			{Path: "models/weapons/melee/v_fireaxe.mdl"},
+		}},
+	}
+	recommended, reason, auto := recommendGroup(group, infos)
+	if auto {
+		t.Fatal("priority recommendation should still require manual confirmation when it is not a strict superset")
+	}
+	if recommended != "survivor.vpk" {
+		t.Fatalf("expected character/weapon priority before generic file count, got %s", recommended)
+	}
+	if !strings.Contains(reason, "角色/武器") {
+		t.Fatalf("recommendation reason did not explain role/weapon priority: %s", reason)
+	}
+
+	weaponOnly := ConflictGroup{
+		Packages: []string{"generic.vpk", "weapon.vpk"},
+		Paths:    []string{"materials/shared/conflict.vtf"},
+	}
+	recommended, reason, auto = recommendGroup(weaponOnly, infos)
+	if auto {
+		t.Fatal("weapon priority should still require manual confirmation when it is not a strict superset")
+	}
+	if recommended != "weapon.vpk" {
+		t.Fatalf("expected weapon priority before generic file count, got %s", recommended)
+	}
+	if !strings.Contains(reason, "角色/武器") {
+		t.Fatalf("weapon recommendation reason did not explain role/weapon priority: %s", reason)
 	}
 }
 
