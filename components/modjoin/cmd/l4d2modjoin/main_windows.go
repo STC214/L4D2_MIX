@@ -22,6 +22,7 @@ import (
 const (
 	wmCreate         = 0x0001
 	wmDestroy        = 0x0002
+	wmSize           = 0x0005
 	wmPaint          = 0x000F
 	wmEraseBkgnd     = 0x0014
 	wmClose          = 0x0010
@@ -69,55 +70,77 @@ const (
 )
 
 var (
-	user32             = syscall.NewLazyDLL("user32.dll")
-	gdi32              = syscall.NewLazyDLL("gdi32.dll")
-	kernel32           = syscall.NewLazyDLL("kernel32.dll")
-	comctl32           = syscall.NewLazyDLL("comctl32.dll")
-	shell32            = syscall.NewLazyDLL("shell32.dll")
-	ole32              = syscall.NewLazyDLL("ole32.dll")
-	dwmapi             = syscall.NewLazyDLL("dwmapi.dll")
-	procRegisterClass  = user32.NewProc("RegisterClassExW")
-	procCreateWindow   = user32.NewProc("CreateWindowExW")
-	procLoadImage      = user32.NewProc("LoadImageW")
-	procDefWindowProc  = user32.NewProc("DefWindowProcW")
-	procShowWindow     = user32.NewProc("ShowWindow")
-	procUpdateWindow   = user32.NewProc("UpdateWindow")
-	procGetMessage     = user32.NewProc("GetMessageW")
-	procTranslate      = user32.NewProc("TranslateMessage")
-	procDispatch       = user32.NewProc("DispatchMessageW")
-	procPostQuit       = user32.NewProc("PostQuitMessage")
-	procSendMessage    = user32.NewProc("SendMessageW")
-	procPostMessage    = user32.NewProc("PostMessageW")
-	procSetWindowText  = user32.NewProc("SetWindowTextW")
-	procGetWindowText  = user32.NewProc("GetWindowTextW")
-	procGetWindowLen   = user32.NewProc("GetWindowTextLengthW")
-	procEnableWindow   = user32.NewProc("EnableWindow")
-	procSetWindowPos   = user32.NewProc("SetWindowPos")
-	procInvalidateRect = user32.NewProc("InvalidateRect")
-	procGetClientRect  = user32.NewProc("GetClientRect")
-	procBeginPaint     = user32.NewProc("BeginPaint")
-	procEndPaint       = user32.NewProc("EndPaint")
-	procFillRect       = user32.NewProc("FillRect")
-	procSetTextColor   = gdi32.NewProc("SetTextColor")
-	procSetBkColor     = gdi32.NewProc("SetBkColor")
-	procSetBkMode      = gdi32.NewProc("SetBkMode")
-	procTextOut        = gdi32.NewProc("TextOutW")
-	procSelectObject   = gdi32.NewProc("SelectObject")
-	procCreateBrush    = gdi32.NewProc("CreateSolidBrush")
-	procCreateFont     = gdi32.NewProc("CreateFontW")
-	procDeleteObject   = gdi32.NewProc("DeleteObject")
-	procCreateCompatDC = gdi32.NewProc("CreateCompatibleDC")
-	procCreateCompatBM = gdi32.NewProc("CreateCompatibleBitmap")
-	procDeleteDC       = gdi32.NewProc("DeleteDC")
-	procBitBlt         = gdi32.NewProc("BitBlt")
-	procGetModule      = kernel32.NewProc("GetModuleHandleW")
-	procInitControls   = comctl32.NewProc("InitCommonControls")
-	procBrowseFolder   = shell32.NewProc("SHBrowseForFolderW")
-	procGetPathPIDL    = shell32.NewProc("SHGetPathFromIDListW")
-	procCoTaskMemFree  = ole32.NewProc("CoTaskMemFree")
-	procCoInitializeEx = ole32.NewProc("CoInitializeEx")
-	procDwmSetAttr     = dwmapi.NewProc("DwmSetWindowAttribute")
+	user32                        = syscall.NewLazyDLL("user32.dll")
+	gdi32                         = syscall.NewLazyDLL("gdi32.dll")
+	kernel32                      = syscall.NewLazyDLL("kernel32.dll")
+	comctl32                      = syscall.NewLazyDLL("comctl32.dll")
+	shell32                       = syscall.NewLazyDLL("shell32.dll")
+	ole32                         = syscall.NewLazyDLL("ole32.dll")
+	dwmapi                        = syscall.NewLazyDLL("dwmapi.dll")
+	gdiplus                       = syscall.NewLazyDLL("gdiplus.dll")
+	procRegisterClass             = user32.NewProc("RegisterClassExW")
+	procCreateWindow              = user32.NewProc("CreateWindowExW")
+	procLoadImage                 = user32.NewProc("LoadImageW")
+	procDefWindowProc             = user32.NewProc("DefWindowProcW")
+	procShowWindow                = user32.NewProc("ShowWindow")
+	procUpdateWindow              = user32.NewProc("UpdateWindow")
+	procGetMessage                = user32.NewProc("GetMessageW")
+	procTranslate                 = user32.NewProc("TranslateMessage")
+	procDispatch                  = user32.NewProc("DispatchMessageW")
+	procPostQuit                  = user32.NewProc("PostQuitMessage")
+	procSendMessage               = user32.NewProc("SendMessageW")
+	procPostMessage               = user32.NewProc("PostMessageW")
+	procSetWindowText             = user32.NewProc("SetWindowTextW")
+	procGetWindowText             = user32.NewProc("GetWindowTextW")
+	procGetWindowLen              = user32.NewProc("GetWindowTextLengthW")
+	procEnableWindow              = user32.NewProc("EnableWindow")
+	procIsWindowVisible           = user32.NewProc("IsWindowVisible")
+	procSetWindowPos              = user32.NewProc("SetWindowPos")
+	procRedrawWindow              = user32.NewProc("RedrawWindow")
+	procInvalidateRect            = user32.NewProc("InvalidateRect")
+	procGetClientRect             = user32.NewProc("GetClientRect")
+	procBeginPaint                = user32.NewProc("BeginPaint")
+	procEndPaint                  = user32.NewProc("EndPaint")
+	procFillRect                  = user32.NewProc("FillRect")
+	procDrawText                  = user32.NewProc("DrawTextW")
+	procSetTextColor              = gdi32.NewProc("SetTextColor")
+	procSetBkColor                = gdi32.NewProc("SetBkColor")
+	procSetBkMode                 = gdi32.NewProc("SetBkMode")
+	procTextOut                   = gdi32.NewProc("TextOutW")
+	procSelectObject              = gdi32.NewProc("SelectObject")
+	procCreateBrush               = gdi32.NewProc("CreateSolidBrush")
+	procCreateFont                = gdi32.NewProc("CreateFontW")
+	procDeleteObject              = gdi32.NewProc("DeleteObject")
+	procCreateCompatDC            = gdi32.NewProc("CreateCompatibleDC")
+	procCreateCompatBM            = gdi32.NewProc("CreateCompatibleBitmap")
+	procDeleteDC                  = gdi32.NewProc("DeleteDC")
+	procBitBlt                    = gdi32.NewProc("BitBlt")
+	procGetModule                 = kernel32.NewProc("GetModuleHandleW")
+	procInitControls              = comctl32.NewProc("InitCommonControls")
+	procBrowseFolder              = shell32.NewProc("SHBrowseForFolderW")
+	procGetPathPIDL               = shell32.NewProc("SHGetPathFromIDListW")
+	procCoTaskMemFree             = ole32.NewProc("CoTaskMemFree")
+	procCoInitializeEx            = ole32.NewProc("CoInitializeEx")
+	procDwmSetAttr                = dwmapi.NewProc("DwmSetWindowAttribute")
+	procGdiplusStartup            = gdiplus.NewProc("GdiplusStartup")
+	procGdiplusShutdown           = gdiplus.NewProc("GdiplusShutdown")
+	procGdipCreateGraphicsFromHDC = gdiplus.NewProc("GdipCreateFromHDC")
+	procGdipDeleteGraphics        = gdiplus.NewProc("GdipDeleteGraphics")
+	procGdipLoadImageFromFile     = gdiplus.NewProc("GdipLoadImageFromFile")
+	procGdipDisposeImage          = gdiplus.NewProc("GdipDisposeImage")
+	procGdipDrawImageRectI        = gdiplus.NewProc("GdipDrawImageRectI")
+	procGdipGetImageWidth         = gdiplus.NewProc("GdipGetImageWidth")
+	procGdipGetImageHeight        = gdiplus.NewProc("GdipGetImageHeight")
 )
+
+type gdiplusStartupInput struct {
+	GdiplusVersion           uint32
+	DebugEventCallback       uintptr
+	SuppressBackgroundThread int32
+	SuppressExternalCodecs   int32
+}
+
+var gdiplusToken uintptr
 
 type point struct{ X, Y int32 }
 type msg struct {
@@ -189,6 +212,8 @@ func main() {
 	embedParent := embeddedParent()
 	procCoInitializeEx.Call(0, 2)
 	procInitControls.Call()
+	startGDIPlus()
+	defer shutdownGDIPlus()
 	instance, _, _ := procGetModule.Call(0)
 	// rsrc stores the RT_GROUP_ICON resource under ID 2.
 	iconLarge, _, _ := procLoadImage.Call(instance, 2, 1, 32, 32, 0)
@@ -236,6 +261,28 @@ func main() {
 	}
 }
 
+func startGDIPlus() {
+	if gdiplusToken != 0 {
+		return
+	}
+	input := gdiplusStartupInput{GdiplusVersion: 1}
+	token := uintptr(0)
+	if status, _, _ := procGdiplusStartup.Call(
+		uintptr(unsafe.Pointer(&token)),
+		uintptr(unsafe.Pointer(&input)),
+		0,
+	); status == 0 {
+		gdiplusToken = token
+	}
+}
+
+func shutdownGDIPlus() {
+	if gdiplusToken != 0 {
+		procGdiplusShutdown.Call(gdiplusToken)
+		gdiplusToken = 0
+	}
+}
+
 func embeddedParent() uintptr {
 	value := strings.TrimSpace(os.Getenv("L4D2_MIX_PARENT"))
 	if value == "" {
@@ -262,6 +309,9 @@ func windowProc(hwnd uintptr, message uint32, wParam, lParam uintptr) uintptr {
 	case wmCreate:
 		ui.hwnd = hwnd
 		createUI(hwnd)
+		return 0
+	case wmSize:
+		layoutConflictResolver()
 		return 0
 	case wmCommand:
 		id := int(wParam & 0xffff)
@@ -461,7 +511,7 @@ func handleCommand(id int) {
 			logLine("请先点击“智能扫描 MOD”，生成当前目录的动态分类方案。")
 			return
 		}
-		groups, existing, err := unresolvedConflictGroups(ui.stateDir, *ui.scanResult)
+		groups, existing, err := manualConflictGroups(ui.stateDir, *ui.scanResult)
 		if err != nil {
 			logLine("无法读取冲突策略：" + err.Error())
 			return

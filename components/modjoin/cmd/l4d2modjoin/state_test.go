@@ -76,6 +76,49 @@ func TestGroupedSelectionAppliesToEveryPath(t *testing.T) {
 	}
 }
 
+func TestManualConflictGroupsReturnsResolvedGroupsForReview(t *testing.T) {
+	output := t.TempDir()
+	result := modscan.Result{
+		Fingerprint: "review",
+		Conflicts: []modscan.Conflict{{
+			Path: "materials/a.vtf", Packages: []string{"a.vpk", "b.vpk"},
+		}},
+		ConflictGroups: []modscan.ConflictGroup{{
+			ID: "manual", Packages: []string{"a.vpk", "b.vpk"},
+			Paths:       []string{"materials/a.vtf"},
+			Recommended: "b.vpk",
+		}, {
+			ID: "auto", Packages: []string{"c.vpk", "d.vpk"},
+			Paths:        []string{"materials/auto.vtf"},
+			Recommended:  "d.vpk",
+			AutoResolved: true,
+		}},
+	}
+	if err := writeConflictPolicy(output, result); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(output, conflictPolicyName)
+	data, _ := os.ReadFile(path)
+	var policy conflictPolicy
+	if err := json.Unmarshal(data, &policy); err != nil {
+		t.Fatal(err)
+	}
+	policy.Conflicts[0].Selected = "b.vpk"
+	if err := writeJSONAtomic(path, policy); err != nil {
+		t.Fatal(err)
+	}
+	groups, selected, err := manualConflictGroups(output, result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(groups) != 1 || groups[0].ID != "manual" {
+		t.Fatalf("expected resolved manual group to remain reviewable, got %#v", groups)
+	}
+	if selected["materials/a.vtf"] != "b.vpk" {
+		t.Fatalf("existing choice was not preserved: %#v", selected)
+	}
+}
+
 func TestRemoveLegacyOutputJSONOnlyDeletesMatchingToolState(t *testing.T) {
 	output := t.TempDir()
 	stateDir := t.TempDir()

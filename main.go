@@ -61,9 +61,10 @@ const (
 	SS_LEFT             = 0x00000000
 	BS_OWNERDRAW        = 0x0000000B
 
-	SW_HIDE    = 0
-	SW_SHOW    = 5
-	SW_RESTORE = 9
+	SW_HIDE     = 0
+	SW_MAXIMIZE = 3
+	SW_SHOW     = 5
+	SW_RESTORE  = 9
 
 	SWP_NOZORDER   = 0x0004
 	SWP_SHOWWINDOW = 0x0040
@@ -298,7 +299,7 @@ func runUI() {
 	app.hwnd = hwnd
 	procSendMessageW.Call(hwnd, WM_SETICON, ICON_BIG, app.iconBig)
 	procSendMessageW.Call(hwnd, WM_SETICON, ICON_SMALL, app.iconSmall)
-	procShowWindow.Call(hwnd, SW_SHOW)
+	procShowWindow.Call(hwnd, SW_MAXIMIZE)
 	procUpdateWindow.Call(hwnd)
 
 	var m msg
@@ -1004,7 +1005,48 @@ func minimizeToTray() {
 func restoreFromTray() {
 	deleteTrayIcon()
 	procShowWindow.Call(app.hwnd, SW_RESTORE)
+	refreshAfterRestore()
 	procSetForegroundWindow.Call(app.hwnd)
+}
+
+func refreshAfterRestore() {
+	layout(app.hwnd)
+	refreshCurrentPage()
+	for _, handle := range []uintptr{
+		app.hwnd, app.sidebar, app.content,
+		app.bhopBtn, app.filterBtn, app.modsBtn,
+		app.pageHosts[app.current],
+	} {
+		if handle != 0 {
+			procRedrawWindow.Call(handle, 0, 0, RDW_INVALIDATE|RDW_ERASE|RDW_ALLCHILDREN|RDW_UPDATENOW)
+		}
+	}
+	app.mu.Lock()
+	childHwnd := app.children[app.current].hwnd
+	app.mu.Unlock()
+	if childHwnd != 0 {
+		procRedrawWindow.Call(childHwnd, 0, 0, RDW_INVALIDATE|RDW_ERASE|RDW_ALLCHILDREN|RDW_UPDATENOW)
+		procSendMessageW.Call(childHwnd, WM_MIX_ACTIVATE, 0, 0)
+	}
+}
+
+func refreshCurrentPage() {
+	r := clientRect(app.content)
+	pageW, pageH := r.Right-r.Left, r.Bottom-r.Top
+	for i := range app.children {
+		if i != app.current {
+			deactivatePage(i)
+		}
+	}
+	for i, host := range app.pageHosts {
+		if i != app.current {
+			procShowWindow.Call(host, SW_HIDE)
+		}
+	}
+	activatePage(app.current, pageW, pageH)
+	invalidate(app.bhopBtn)
+	invalidate(app.filterBtn)
+	invalidate(app.modsBtn)
 }
 
 func addTrayIcon() bool {

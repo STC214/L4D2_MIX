@@ -220,6 +220,34 @@ func unresolvedConflictGroups(output string, result modscan.Result) ([]modscan.C
 	return unresolved, selectedByPath, nil
 }
 
+func manualConflictGroups(output string, result modscan.Result) ([]modscan.ConflictGroup, map[string]string, error) {
+	path := filepath.Join(output, conflictPolicyName)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, nil, err
+	}
+	var policy conflictPolicy
+	if err := json.Unmarshal(data, &policy); err != nil {
+		return nil, nil, err
+	}
+	if policy.Fingerprint != result.Fingerprint {
+		return nil, nil, fmt.Errorf("冲突策略已过期，请重新扫描")
+	}
+	selectedByPath := map[string]string{}
+	for _, choice := range policy.Conflicts {
+		if contains(choice.Packages, choice.Selected) {
+			selectedByPath[choice.Path] = choice.Selected
+		}
+	}
+	var manual []modscan.ConflictGroup
+	for _, group := range result.ConflictGroups {
+		if !group.AutoResolved {
+			manual = append(manual, group)
+		}
+	}
+	return manual, selectedByPath, nil
+}
+
 func saveConflictGroupSelections(output string, result modscan.Result, selections map[string]string) error {
 	path := filepath.Join(output, conflictPolicyName)
 	data, err := os.ReadFile(path)
