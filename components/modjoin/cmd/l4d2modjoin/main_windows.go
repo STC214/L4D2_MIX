@@ -754,12 +754,8 @@ func applyWeaponSoundVolume(plan *vpkmerge.Plan, percent int) {
 		return
 	}
 	for index := range plan.Groups {
-		output := strings.ToLower(plan.Groups[index].Output)
-		title := strings.ToLower(plan.Groups[index].Title)
-		if strings.Contains(output, "weapons") || strings.Contains(title, "weapon") {
-			value := percent
-			plan.Groups[index].SoundVolumePercent = &value
-		}
+		value := percent
+		plan.Groups[index].SoundVolumePercent = &value
 	}
 }
 

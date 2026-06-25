@@ -502,8 +502,7 @@ func readOutputContent(entry sourceEntry, group Group) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	if group.SoundVolumePercent == nil || *group.SoundVolumePercent == 100 ||
-		!strings.HasPrefix(entry.path, "sound/") || !strings.HasSuffix(entry.path, ".wav") {
+	if group.SoundVolumePercent == nil || *group.SoundVolumePercent == 100 || !isWeaponSoundWAV(entry.path) {
 		return content, nil
 	}
 	adjusted, _, err := ScaleWAVVolume(content, *group.SoundVolumePercent)
@@ -511,6 +510,26 @@ func readOutputContent(entry sourceEntry, group Group) ([]byte, error) {
 		return nil, err
 	}
 	return adjusted, nil
+}
+
+func isWeaponSoundWAV(path string) bool {
+	path = normalize(path)
+	if !strings.HasPrefix(path, "sound/weapons/") || !strings.HasSuffix(path, ".wav") {
+		return false
+	}
+	relative := strings.TrimPrefix(path, "sound/weapons/")
+	first := relative
+	if slash := strings.IndexByte(relative, '/'); slash >= 0 {
+		first = relative[:slash]
+	}
+	switch first {
+	case "melee", "chainsaw", "molotov", "pipe_bomb", "vomitjar",
+		"gascan", "propanetank", "oxygentank", "fireworkcrate", "cola_bottles",
+		"first_aid_kit", "defibrillator", "adrenaline", "pain_pills",
+		"upgradepack", "ammo_pack":
+		return false
+	}
+	return true
 }
 
 func ScaleWAVVolume(data []byte, percent int) ([]byte, bool, error) {

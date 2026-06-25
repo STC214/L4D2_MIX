@@ -52,7 +52,7 @@ func TestWriteGroupUpdatesCRCForScaledSound(t *testing.T) {
 	_, err := writeGroup(Plan{Output: root}, Group{
 		Output:             "scaled.vpk",
 		Title:              "Scaled",
-		Overlay:            map[string]string{"sound/weapons/test.wav": source},
+		Overlay:            map[string]string{"sound/weapons/pistol/gunfire/pistol_fire_1.wav": source},
 		SoundVolumePercent: &volume,
 	})
 	if err != nil {
@@ -60,6 +60,62 @@ func TestWriteGroupUpdatesCRCForScaledSound(t *testing.T) {
 	}
 	if _, err := Verify(filepath.Join(root, "scaled.vpk")); err != nil {
 		t.Fatalf("scaled VPK should verify with updated CRC: %v", err)
+	}
+	content, err := ReadFile(filepath.Join(root, "scaled.vpk"), "sound/weapons/pistol/gunfire/pistol_fire_1.wav")
+	if err != nil {
+		t.Fatal(err)
+	}
+	data := content[len(content)-2:]
+	if got := int16(binary.LittleEndian.Uint16(data)); got != 500 {
+		t.Fatalf("pistol sound sample = %d, want 500", got)
+	}
+}
+
+func TestWriteGroupDoesNotScaleNonWeaponSound(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "music.wav")
+	original := testPCM16WAV([]int16{1000})
+	if err := os.WriteFile(source, original, 0644); err != nil {
+		t.Fatal(err)
+	}
+	volume := 50
+	_, err := writeGroup(Plan{Output: root}, Group{
+		Output:             "music.vpk",
+		Title:              "Music",
+		Overlay:            map[string]string{"sound/music/test.wav": source},
+		SoundVolumePercent: &volume,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	content, err := ReadFile(filepath.Join(root, "music.vpk"), "sound/music/test.wav")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(content) != string(original) {
+		t.Fatal("non-weapon sound should remain unchanged")
+	}
+}
+
+func TestWeaponSoundWAVMatchesFirearmsOnly(t *testing.T) {
+	tests := map[string]bool{
+		"sound/weapons/pistol/gunfire/pistol_fire_1.wav":       true,
+		"sound/weapons/shotgun/gunfire/shotgun_fire_1.wav":     true,
+		"sound/weapons/pumpshotgun/gunfire/shotgun_fire_1.wav": true,
+		"sound/weapons/rifle/gunfire/rifle_fire_1.wav":         true,
+		"sound/weapons/smg/gunfire/smg_fire_1.wav":             true,
+		"sound/weapons/grenade_launcher/grenadefire_1.wav":     true,
+		"sound/weapons/custom_mod/fire_1.wav":                  true,
+		"sound/weapons/melee/swing.wav":                        false,
+		"sound/weapons/chainsaw/chainsaw_start_01.wav":         false,
+		"sound/weapons/molotov/fire_loop_1.wav":                false,
+		"sound/weapons/first_aid_kit/use.wav":                  false,
+		"sound/music/flu/jukebox.wav":                          false,
+	}
+	for path, want := range tests {
+		if got := isWeaponSoundWAV(path); got != want {
+			t.Fatalf("%s = %v, want %v", path, got, want)
+		}
 	}
 }
 
