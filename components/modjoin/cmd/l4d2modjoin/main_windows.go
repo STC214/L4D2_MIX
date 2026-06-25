@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -621,6 +622,17 @@ func startTask(kind string) {
 				break
 			}
 			applyWeaponSoundVolume(&plan, weaponVolume)
+			officialCleanup, officialCount, officialErr := prepareOfficialWeaponSoundOverlays(&plan, scanResult, addons, weaponVolume)
+			if officialCleanup != nil {
+				defer officialCleanup()
+			}
+			if officialErr != nil {
+				postEvent(appEvent{Kind: "error", Text: "官方武器音效导入失败：" + officialErr.Error()})
+				break
+			}
+			if officialCount > 0 {
+				postEvent(appEvent{Kind: "log", Text: fmt.Sprintf("已从游戏官方 VPK 导入 %d 个射击类武器音效副本，并按当前武器音量设置处理。", officialCount)})
+			}
 			// Any new build attempt invalidates the previous deployable state.
 			_ = os.Remove(filepath.Join(ui.stateDir, buildManifestName))
 			cleanup, err := prepareOverlays(&plan, scanResult)
@@ -757,6 +769,161 @@ func applyWeaponSoundVolume(plan *vpkmerge.Plan, percent int) {
 		value := percent
 		plan.Groups[index].SoundVolumePercent = &value
 	}
+}
+
+func prepareOfficialWeaponSoundOverlays(plan *vpkmerge.Plan, scanResult *modscan.Result, addonsDir string, percent int) (func(), int, error) {
+	if plan == nil || scanResult == nil || percent == 100 || !scanHasWeaponPackages(scanResult) {
+		return nil, 0, nil
+	}
+	targetIndex := weaponOutputGroupIndex(plan)
+	if targetIndex < 0 {
+		return nil, 0, nil
+	}
+	vpks := officialGameVPKs(addonsDir)
+	if len(vpks) == 0 {
+		return nil, 0, fmt.Errorf("未找到官方 VPK；请确认“游戏 Addons 目录”指向 Left 4 Dead 2\\left4dead2\\addons，并且游戏目录中存在 left4dead2\\pak01_dir.vpk 或 left4dead2_*\\pak01_dir.vpk")
+	}
+	existing, err := plannedOutputPaths(*plan)
+	if err != nil {
+		return nil, 0, err
+	}
+	official := map[string]string{}
+	for _, vpkPath := range vpks {
+		info, inspectErr := vpkmerge.Inspect(vpkPath)
+		if inspectErr != nil {
+			return nil, 0, inspectErr
+		}
+		for _, file := range info.Files {
+			if vpkmerge.IsWeaponSoundWAV(file.Path) {
+				official[file.Path] = vpkPath
+			}
+		}
+	}
+	if len(official) == 0 {
+		return nil, 0, nil
+	}
+	dir, err := os.MkdirTemp("", "l4d2modjoin-official-weapon-sounds-")
+	if err != nil {
+		return nil, 0, err
+	}
+	cleanup := func() { os.RemoveAll(dir) }
+	paths := make([]string, 0, len(official))
+	for path := range official {
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+	if plan.Groups[targetIndex].Overlay == nil {
+		plan.Groups[targetIndex].Overlay = map[string]string{}
+	}
+	added := 0
+	for _, path := range paths {
+		if existing[path] || plan.Groups[targetIndex].Overlay[path] != "" {
+			continue
+		}
+		content, readErr := vpkmerge.ReadFile(official[path], path)
+		if readErr != nil {
+			cleanup()
+			return nil, 0, readErr
+		}
+		local := filepath.Join(dir, filepath.FromSlash(path))
+		if mkdirErr := os.MkdirAll(filepath.Dir(local), 0755); mkdirErr != nil {
+			cleanup()
+			return nil, 0, mkdirErr
+		}
+		if writeErr := os.WriteFile(local, content, 0644); writeErr != nil {
+			cleanup()
+			return nil, 0, writeErr
+		}
+		plan.Groups[targetIndex].Overlay[path] = local
+		existing[path] = true
+		added++
+	}
+	if added == 0 {
+		cleanup()
+		return nil, 0, nil
+	}
+	return cleanup, added, nil
+}
+
+func scanHasWeaponPackages(result *modscan.Result) bool {
+	for _, category := range result.Categories {
+		if category.Key == "weapons" && len(category.Packages) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func weaponOutputGroupIndex(plan *vpkmerge.Plan) int {
+	for index, group := range plan.Groups {
+		if strings.Contains(strings.ToLower(group.Output), "weapons") || strings.Contains(strings.ToLower(group.Title), "weapon") {
+			return index
+		}
+	}
+	return -1
+}
+
+func officialGameVPKs(addonsDir string) []string {
+	if strings.TrimSpace(addonsDir) == "" {
+		return nil
+	}
+	left4dead2 := filepath.Dir(filepath.Clean(addonsDir))
+	gameRoot := filepath.Dir(left4dead2)
+	paths, _ := filepath.Glob(filepath.Join(gameRoot, "*", "pak01_dir.vpk"))
+	sort.Strings(paths)
+	var result []string
+	for _, path := range paths {
+		name := strings.ToLower(filepath.Base(filepath.Dir(path)))
+		if name == "left4dead2" || strings.HasPrefix(name, "left4dead2_") {
+			result = append(result, path)
+		}
+	}
+	return result
+}
+
+func plannedOutputPaths(plan vpkmerge.Plan) (map[string]bool, error) {
+	paths := map[string]bool{}
+	for _, group := range plan.Groups {
+		for path := range group.Overlay {
+			paths[normalizeVPKPath(path)] = true
+		}
+		excluded := map[string]bool{}
+		for _, path := range group.Exclude {
+			excluded[normalizeVPKPath(path)] = true
+		}
+		for _, packageName := range group.Packages {
+			info, err := vpkmerge.Inspect(filepath.Join(plan.Input, packageName))
+			if err != nil {
+				return nil, err
+			}
+			for _, file := range info.Files {
+				path := normalizeVPKPath(file.Path)
+				if isRuntimeMetadataPath(path) || excluded[path] || packagePathExcluded(group, packageName, path) {
+					continue
+				}
+				paths[path] = true
+			}
+		}
+	}
+	return paths, nil
+}
+
+func packagePathExcluded(group vpkmerge.Group, packageName, path string) bool {
+	for _, excluded := range group.ExcludeByPackage[packageName] {
+		if normalizeVPKPath(excluded) == path {
+			return true
+		}
+	}
+	return false
+}
+
+func isRuntimeMetadataPath(path string) bool {
+	return path == "addoninfo.txt" || path == "addonimage.jpg" || path == "addonimage.png" ||
+		strings.HasPrefix(path, "source files/")
+}
+
+func normalizeVPKPath(path string) string {
+	return strings.ToLower(strings.ReplaceAll(filepath.ToSlash(path), "\\", "/"))
 }
 
 func isDirectoryEdit(id int) bool {

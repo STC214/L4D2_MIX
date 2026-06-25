@@ -502,7 +502,7 @@ func readOutputContent(entry sourceEntry, group Group) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	if group.SoundVolumePercent == nil || *group.SoundVolumePercent == 100 || !isWeaponSoundWAV(entry.path) {
+	if group.SoundVolumePercent == nil || *group.SoundVolumePercent == 100 || !IsWeaponSoundWAV(entry.path) {
 		return content, nil
 	}
 	adjusted, _, err := ScaleWAVVolume(content, *group.SoundVolumePercent)
@@ -512,7 +512,7 @@ func readOutputContent(entry sourceEntry, group Group) ([]byte, error) {
 	return adjusted, nil
 }
 
-func isWeaponSoundWAV(path string) bool {
+func IsWeaponSoundWAV(path string) bool {
 	path = normalize(path)
 	if !strings.HasPrefix(path, "sound/weapons/") || !strings.HasSuffix(path, ".wav") {
 		return false

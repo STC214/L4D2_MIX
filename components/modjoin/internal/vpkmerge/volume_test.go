@@ -113,7 +113,7 @@ func TestWeaponSoundWAVMatchesFirearmsOnly(t *testing.T) {
 		"sound/music/flu/jukebox.wav":                          false,
 	}
 	for path, want := range tests {
-		if got := isWeaponSoundWAV(path); got != want {
+		if got := IsWeaponSoundWAV(path); got != want {
 			t.Fatalf("%s = %v, want %v", path, got, want)
 		}
 	}
