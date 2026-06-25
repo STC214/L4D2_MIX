@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"hash/crc32"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -34,12 +35,13 @@ type sourceEntry struct {
 }
 
 type Group struct {
-	Output           string              `json:"output"`
-	Title            string              `json:"title"`
-	Packages         []string            `json:"packages"`
-	Exclude          []string            `json:"exclude"`
-	ExcludeByPackage map[string][]string `json:"exclude_by_package,omitempty"`
-	Overlay          map[string]string   `json:"overlay"`
+	Output             string              `json:"output"`
+	Title              string              `json:"title"`
+	Packages           []string            `json:"packages"`
+	Exclude            []string            `json:"exclude"`
+	ExcludeByPackage   map[string][]string `json:"exclude_by_package,omitempty"`
+	Overlay            map[string]string   `json:"overlay"`
+	SoundVolumePercent *int                `json:"sound_volume_percent,omitempty"`
 }
 
 type Plan struct {
@@ -426,13 +428,14 @@ func writeGroup(cfg Plan, g Group) (Progress, error) {
 	var offset uint64
 	for _, path := range paths {
 		src := selected[path]
-		content, err := readContent(src)
+		content, err := readOutputContent(src, g)
 		if err != nil {
 			return Progress{}, fmt.Errorf("%s: %w", path, err)
 		}
 		if offset+uint64(len(content)) > uint64(^uint32(0)) {
 			return Progress{}, fmt.Errorf("%s exceeds VPK v1 4GiB data limit", g.Output)
 		}
+		src.crc = crc32.ChecksumIEEE(content)
 		ext, dir, name := splitPath(path)
 		entries = append(entries, &treeEntry{
 			sourceEntry: src, ext: ext, dir: dir, name: name,
@@ -462,7 +465,7 @@ func writeGroup(cfg Plan, g Group) (Progress, error) {
 		return Progress{}, err
 	}
 	for _, entry := range entries {
-		content, err := readContent(entry.sourceEntry)
+		content, err := readOutputContent(entry.sourceEntry, g)
 		if err != nil {
 			out.Close()
 			return Progress{}, err
@@ -492,6 +495,135 @@ func packageExcluded(group Group, packageName, path string) bool {
 		}
 	}
 	return false
+}
+
+func readOutputContent(entry sourceEntry, group Group) ([]byte, error) {
+	content, err := readContent(entry)
+	if err != nil {
+		return nil, err
+	}
+	if group.SoundVolumePercent == nil || *group.SoundVolumePercent == 100 ||
+		!strings.HasPrefix(entry.path, "sound/") || !strings.HasSuffix(entry.path, ".wav") {
+		return content, nil
+	}
+	adjusted, _, err := ScaleWAVVolume(content, *group.SoundVolumePercent)
+	if err != nil {
+		return nil, err
+	}
+	return adjusted, nil
+}
+
+func ScaleWAVVolume(data []byte, percent int) ([]byte, bool, error) {
+	if percent < 0 || percent > 100 {
+		return nil, false, fmt.Errorf("volume percent must be 0-100")
+	}
+	if percent == 100 {
+		return data, false, nil
+	}
+	if len(data) < 12 || string(data[:4]) != "RIFF" || string(data[8:12]) != "WAVE" {
+		return data, false, nil
+	}
+	var formatTag, bitsPerSample uint16
+	var dataStart, dataSize int
+	for offset := 12; offset+8 <= len(data); {
+		chunkID := string(data[offset : offset+4])
+		chunkSize := int(binary.LittleEndian.Uint32(data[offset+4 : offset+8]))
+		if chunkSize < 0 || offset+8+chunkSize > len(data) {
+			return nil, false, fmt.Errorf("invalid WAV chunk")
+		}
+		chunkStart := offset + 8
+		switch chunkID {
+		case "fmt ":
+			if chunkSize >= 16 {
+				formatTag = binary.LittleEndian.Uint16(data[chunkStart : chunkStart+2])
+				bitsPerSample = binary.LittleEndian.Uint16(data[chunkStart+14 : chunkStart+16])
+			}
+		case "data":
+			dataStart = chunkStart
+			dataSize = chunkSize
+		}
+		offset = chunkStart + chunkSize
+		if chunkSize%2 == 1 {
+			offset++
+		}
+	}
+	if dataStart == 0 || dataSize == 0 || formatTag == 0 || bitsPerSample == 0 {
+		return data, false, nil
+	}
+	factor := float64(percent) / 100
+	out := append([]byte(nil), data...)
+	samples := out[dataStart : dataStart+dataSize]
+	switch formatTag {
+	case 1:
+		switch bitsPerSample {
+		case 8:
+			for i := range samples {
+				centered := int(samples[i]) - 128
+				samples[i] = byte(clampInt(int(math.Round(float64(centered)*factor))+128, 0, 255))
+			}
+		case 16:
+			for i := 0; i+2 <= len(samples); i += 2 {
+				value := int16(binary.LittleEndian.Uint16(samples[i : i+2]))
+				binary.LittleEndian.PutUint16(samples[i:i+2], uint16(int16(clampInt(int(math.Round(float64(value)*factor)), -32768, 32767))))
+			}
+		case 24:
+			for i := 0; i+3 <= len(samples); i += 3 {
+				value := int(samples[i]) | int(samples[i+1])<<8 | int(samples[i+2])<<16
+				if value&0x800000 != 0 {
+					value |= ^0xffffff
+				}
+				scaled := clampInt(int(math.Round(float64(value)*factor)), -8388608, 8388607)
+				samples[i] = byte(scaled)
+				samples[i+1] = byte(scaled >> 8)
+				samples[i+2] = byte(scaled >> 16)
+			}
+		case 32:
+			for i := 0; i+4 <= len(samples); i += 4 {
+				value := int32(binary.LittleEndian.Uint32(samples[i : i+4]))
+				binary.LittleEndian.PutUint32(samples[i:i+4], uint32(int32(clampInt64(int64(math.Round(float64(value)*factor)), -2147483648, 2147483647))))
+			}
+		default:
+			return data, false, nil
+		}
+	case 3:
+		switch bitsPerSample {
+		case 32:
+			for i := 0; i+4 <= len(samples); i += 4 {
+				value := math.Float32frombits(binary.LittleEndian.Uint32(samples[i : i+4]))
+				binary.LittleEndian.PutUint32(samples[i:i+4], math.Float32bits(value*float32(factor)))
+			}
+		case 64:
+			for i := 0; i+8 <= len(samples); i += 8 {
+				value := math.Float64frombits(binary.LittleEndian.Uint64(samples[i : i+8]))
+				binary.LittleEndian.PutUint64(samples[i:i+8], math.Float64bits(value*factor))
+			}
+		default:
+			return data, false, nil
+		}
+	default:
+		return data, false, nil
+	}
+	return out, true, nil
+}
+
+func clampInt(value, min, max int) int {
+	if value < min {
+		return min
+	}
+	if value > max {
+		return max
+	}
+	return value
+}
+
+func clampInt64(value, min, max int64) int64 {
+	if value < min {
+		return min
+	}
+	if value > max {
+		return max
+	}
+	return value
 }
 
 func LoadPlan(path string) (Plan, error) {

@@ -65,6 +65,8 @@ const (
 	idSourceEdit     = 1021
 	idOutputEdit     = 1022
 	idAddonsEdit     = 1023
+	idWeaponVolume   = 1031
+	idWeaponCustom   = 1032
 	enChange         = 0x0300
 	enKillFocus      = 0x0200
 )
@@ -191,6 +193,7 @@ type appEvent struct {
 
 type uiState struct {
 	hwnd, source, output, addons, log, progress uintptr
+	weaponVolume, weaponCustom                  uintptr
 	scan, merge, deploy, restore                uintptr
 	font, titleFont                             uintptr
 	bgBrush, fieldBrush                         uintptr
@@ -324,6 +327,11 @@ func windowProc(hwnd uintptr, message uint32, wParam, lParam uintptr) uintptr {
 				logLine("保存目录设置失败：" + err.Error())
 			}
 		}
+		if (id == idWeaponVolume && code == cbnSelChange) || (id == idWeaponCustom && code == enKillFocus) {
+			if err := saveCurrentDirectorySettings(); err != nil {
+				logLine("保存音量设置失败：" + err.Error())
+			}
+		}
 		if id != 0 {
 			handleCommand(id)
 		}
@@ -436,15 +444,20 @@ func createUI(hwnd uintptr) {
 	makeButton(hwnd, "浏览", 844, 220, 88, 34, idBrowseOut)
 	makeLabel(hwnd, "游戏 Addons 目录", 42, 268, 180, 24)
 	ui.addons = makeControl(hwnd, "EDIT", addons, wsChild|wsVisible|wsBorder|esAutoHScroll|wsTabStop, 42, 295, 790, 34, idAddonsEdit)
+	makeLabel(hwnd, "武器 VPK 音效音量", 42, 343, 190, 24)
+	ui.weaponVolume = makeControl(hwnd, "COMBOBOX", "", wsChild|wsVisible|wsBorder|wsTabStop|cbsDropDownList, 236, 338, 120, 160, idWeaponVolume)
+	ui.weaponCustom = makeControl(hwnd, "EDIT", settings.CustomWeaponSoundVolume, wsChild|wsVisible|wsBorder|esAutoHScroll|wsTabStop, 382, 338, 120, 34, idWeaponCustom)
+	makeLabel(hwnd, "自定义 %", 512, 343, 120, 24)
+	initWeaponVolumeControls(settings)
 	makeButton(hwnd, "浏览", 844, 295, 88, 34, idBrowseGame)
 
-	ui.scan = makeButton(hwnd, "智能扫描 MOD", 42, 355, 150, 44, idScan)
-	ui.merge = makeButton(hwnd, "一键分类合并", 206, 355, 180, 44, idMerge)
-	ui.deploy = makeButton(hwnd, "部署并禁用原 MOD", 400, 355, 220, 44, idDeploy)
-	ui.restore = makeButton(hwnd, "一键还原官方MOD", 634, 355, 170, 44, idRestore)
-	ui.progress = makeControl(hwnd, "msctls_progress32", "", wsChild|wsVisible, 42, 420, 890, 18, 0)
+	ui.scan = makeButton(hwnd, "智能扫描 MOD", 42, 405, 150, 44, idScan)
+	ui.merge = makeButton(hwnd, "一键分类合并", 206, 405, 180, 44, idMerge)
+	ui.deploy = makeButton(hwnd, "部署并禁用原 MOD", 400, 405, 220, 44, idDeploy)
+	ui.restore = makeButton(hwnd, "一键还原官方MOD", 634, 405, 170, 44, idRestore)
+	ui.progress = makeControl(hwnd, "msctls_progress32", "", wsChild|wsVisible, 42, 470, 890, 18, 0)
 	procSendMessage.Call(ui.progress, pbmSetRange32, 0, 100)
-	ui.log = makeControl(hwnd, "LISTBOX", "", wsChild|wsVisible|wsBorder|wsVScroll|lbsNoIntegral, 42, 462, 890, 190, 0)
+	ui.log = makeControl(hwnd, "LISTBOX", "", wsChild|wsVisible|wsBorder|wsVScroll|lbsNoIntegral, 42, 512, 890, 150, 0)
 	logLine("就绪。耗时操作将在后台执行，界面不会因扫描或合并而阻塞。")
 	if addons == "" {
 		logLine("未自动找到游戏目录，请手动选择 left4dead2\\addons。")
@@ -602,6 +615,12 @@ func startTask(kind string) {
 				postEvent(appEvent{Kind: "error", Text: planErr.Error()})
 				break
 			}
+			weaponVolume, volumeErr := weaponVolumePercent()
+			if volumeErr != nil {
+				postEvent(appEvent{Kind: "error", Text: volumeErr.Error()})
+				break
+			}
+			applyWeaponSoundVolume(&plan, weaponVolume)
 			// Any new build attempt invalidates the previous deployable state.
 			_ = os.Remove(filepath.Join(ui.stateDir, buildManifestName))
 			cleanup, err := prepareOverlays(&plan, scanResult)
@@ -691,21 +710,77 @@ func startTask(kind string) {
 	}()
 }
 
+var weaponVolumeOptions = []int{0, 14, 42, 70, 100}
+
+func initWeaponVolumeControls(settings appSettings) {
+	selected := settings.WeaponSoundVolumePercent
+	if selected < 0 || selected > 100 {
+		selected = 100
+	}
+	selectedIndex := len(weaponVolumeOptions) - 1
+	for index, value := range weaponVolumeOptions {
+		label := fmt.Sprintf("%d%%", value)
+		procSendMessage.Call(ui.weaponVolume, cbAddString, 0, uintptr(unsafe.Pointer(utf16(label))))
+		if value == selected {
+			selectedIndex = index
+		}
+	}
+	procSendMessage.Call(ui.weaponVolume, cbSetCurSel, uintptr(selectedIndex), 0)
+}
+
+func selectedWeaponVolumePercent() (int, error) {
+	index, _, _ := procSendMessage.Call(ui.weaponVolume, cbGetCurSel, 0, 0)
+	if int(index) >= 0 && int(index) < len(weaponVolumeOptions) {
+		return weaponVolumeOptions[int(index)], nil
+	}
+	return 100, nil
+}
+
+func weaponVolumePercent() (int, error) {
+	custom := strings.TrimSpace(getText(ui.weaponCustom))
+	custom = strings.TrimSuffix(custom, "%")
+	if custom != "" {
+		value, err := strconv.Atoi(strings.TrimSpace(custom))
+		if err != nil || value < 0 || value > 100 {
+			return 0, fmt.Errorf("武器 VPK 自定义音量必须是 0-100 的整数百分比")
+		}
+		return value, nil
+	}
+	return selectedWeaponVolumePercent()
+}
+
+func applyWeaponSoundVolume(plan *vpkmerge.Plan, percent int) {
+	if percent == 100 {
+		return
+	}
+	for index := range plan.Groups {
+		output := strings.ToLower(plan.Groups[index].Output)
+		title := strings.ToLower(plan.Groups[index].Title)
+		if strings.Contains(output, "weapons") || strings.Contains(title, "weapon") {
+			value := percent
+			plan.Groups[index].SoundVolumePercent = &value
+		}
+	}
+}
+
 func isDirectoryEdit(id int) bool {
 	return id == idSourceEdit || id == idOutputEdit || id == idAddonsEdit
 }
 
 func currentDirectorySettings() appSettings {
+	volume, _ := selectedWeaponVolumePercent()
 	return appSettings{
-		Version: 1,
-		Source:  getText(ui.source),
-		Output:  getText(ui.output),
-		Addons:  getText(ui.addons),
+		Version:                  1,
+		Source:                   getText(ui.source),
+		Output:                   getText(ui.output),
+		Addons:                   getText(ui.addons),
+		WeaponSoundVolumePercent: volume,
+		CustomWeaponSoundVolume:  getText(ui.weaponCustom),
 	}
 }
 
 func saveCurrentDirectorySettings() error {
-	if ui.stateDir == "" || ui.source == 0 || ui.output == 0 || ui.addons == 0 {
+	if ui.stateDir == "" || ui.source == 0 || ui.output == 0 || ui.addons == 0 || ui.weaponVolume == 0 || ui.weaponCustom == 0 {
 		return nil
 	}
 	return saveAppSettings(ui.stateDir, currentDirectorySettings())

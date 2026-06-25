@@ -79,10 +79,13 @@ func migrateRootStateFiles(rootDir, stateDir string) (int, error) {
 }
 
 type appSettings struct {
-	Version int    `json:"version"`
-	Source  string `json:"source"`
-	Output  string `json:"output"`
-	Addons  string `json:"addons"`
+	Version                     int    `json:"version"`
+	Source                      string `json:"source"`
+	Output                      string `json:"output"`
+	Addons                      string `json:"addons"`
+	WeaponSoundVolumePercent    int    `json:"weapon_sound_volume_percent,omitempty"`
+	WeaponSoundVolumeConfigured bool   `json:"weapon_sound_volume_configured,omitempty"`
+	CustomWeaponSoundVolume     string `json:"custom_weapon_sound_volume,omitempty"`
 }
 
 type conflictChoice struct {
@@ -140,6 +143,12 @@ func loadAppSettings(stateDir string) (appSettings, error) {
 	settings.Source = strings.TrimSpace(settings.Source)
 	settings.Output = strings.TrimSpace(settings.Output)
 	settings.Addons = strings.TrimSpace(settings.Addons)
+	settings.CustomWeaponSoundVolume = strings.TrimSpace(settings.CustomWeaponSoundVolume)
+	if !settings.WeaponSoundVolumeConfigured {
+		settings.WeaponSoundVolumePercent = 100
+	} else if settings.WeaponSoundVolumePercent < 0 || settings.WeaponSoundVolumePercent > 100 {
+		settings.WeaponSoundVolumePercent = 100
+	}
 	return settings, nil
 }
 
@@ -148,6 +157,11 @@ func saveAppSettings(stateDir string, settings appSettings) error {
 	settings.Source = strings.TrimSpace(settings.Source)
 	settings.Output = strings.TrimSpace(settings.Output)
 	settings.Addons = strings.TrimSpace(settings.Addons)
+	settings.CustomWeaponSoundVolume = strings.TrimSpace(settings.CustomWeaponSoundVolume)
+	settings.WeaponSoundVolumeConfigured = true
+	if settings.WeaponSoundVolumePercent < 0 || settings.WeaponSoundVolumePercent > 100 {
+		settings.WeaponSoundVolumePercent = 100
+	}
 	return writeJSONAtomic(filepath.Join(stateDir, settingsName), settings)
 }
 

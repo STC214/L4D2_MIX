@@ -1004,14 +1004,16 @@ func minimizeToTray() {
 
 func restoreFromTray() {
 	deleteTrayIcon()
+	procShowWindow.Call(app.hwnd, SW_SHOW)
 	procShowWindow.Call(app.hwnd, SW_MAXIMIZE)
 	refreshAfterRestore()
 	procSetForegroundWindow.Call(app.hwnd)
+	procUpdateWindow.Call(app.hwnd)
 }
 
 func refreshAfterRestore() {
 	layout(app.hwnd)
-	refreshCurrentPage()
+	forceRefreshCurrentPage()
 	for _, handle := range []uintptr{
 		app.hwnd, app.sidebar, app.content,
 		app.bhopBtn, app.filterBtn, app.modsBtn,
@@ -1027,6 +1029,46 @@ func refreshAfterRestore() {
 	if childHwnd != 0 {
 		procRedrawWindow.Call(childHwnd, 0, 0, RDW_INVALIDATE|RDW_ERASE|RDW_ALLCHILDREN|RDW_UPDATENOW)
 		procSendMessageW.Call(childHwnd, WM_MIX_ACTIVATE, 0, 0)
+		procUpdateWindow.Call(childHwnd)
+	}
+}
+
+func forceRefreshCurrentPage() {
+	r := clientRect(app.content)
+	pageW, pageH := r.Right-r.Left, r.Bottom-r.Top
+	for i := range app.children {
+		if i != app.current {
+			deactivatePage(i)
+		}
+	}
+	for i, host := range app.pageHosts {
+		if i != app.current {
+			procShowWindow.Call(host, SW_HIDE)
+		}
+	}
+	host := app.pageHosts[app.current]
+	if host != 0 {
+		procShowWindow.Call(host, SW_HIDE)
+		move(host, 0, 0, pageW, pageH)
+		procRedrawWindow.Call(app.content, 0, 0, RDW_INVALIDATE|RDW_ERASE|RDW_ALLCHILDREN|RDW_UPDATENOW)
+		procShowWindow.Call(host, SW_SHOW)
+	}
+	app.mu.Lock()
+	childHwnd := app.children[app.current].hwnd
+	enabledBeforeHide := app.children[app.current].enabledBeforeHide
+	app.children[app.current].active = false
+	app.mu.Unlock()
+	if childHwnd != 0 {
+		procShowWindow.Call(childHwnd, SW_HIDE)
+		procSetWindowPos.Call(childHwnd, 0, 0, 0, uintptr(pageW), uintptr(pageH), SWP_NOZORDER)
+		if enabledBeforeHide {
+			procEnableWindow.Call(childHwnd, 1)
+		}
+		procShowWindow.Call(childHwnd, SW_SHOW)
+		app.mu.Lock()
+		app.children[app.current].active = true
+		app.mu.Unlock()
+		procRedrawWindow.Call(childHwnd, 0, 0, RDW_INVALIDATE|RDW_ERASE|RDW_ALLCHILDREN|RDW_UPDATENOW)
 	}
 }
 
