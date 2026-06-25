@@ -446,8 +446,8 @@ func createUI(hwnd uintptr) {
 	ui.addons = makeControl(hwnd, "EDIT", addons, wsChild|wsVisible|wsBorder|esAutoHScroll|wsTabStop, 42, 295, 790, 34, idAddonsEdit)
 	makeLabel(hwnd, "武器 VPK 音效音量", 42, 343, 190, 24)
 	ui.weaponVolume = makeControl(hwnd, "COMBOBOX", "", wsChild|wsVisible|wsBorder|wsTabStop|cbsDropDownList, 236, 338, 120, 160, idWeaponVolume)
-	ui.weaponCustom = makeControl(hwnd, "EDIT", settings.CustomWeaponSoundVolume, wsChild|wsVisible|wsBorder|esAutoHScroll|wsTabStop, 382, 338, 120, 34, idWeaponCustom)
-	makeLabel(hwnd, "自定义 %", 512, 343, 120, 24)
+	ui.weaponCustom = makeControl(hwnd, "EDIT", settings.CustomWeaponSoundVolume, wsChild|wsVisible|wsBorder|esAutoHScroll|wsTabStop, 382, 338, 120, 26, idWeaponCustom)
+	makeLabel(hwnd, "自定义 %", 512, 341, 120, 24)
 	initWeaponVolumeControls(settings)
 	makeButton(hwnd, "浏览", 844, 295, 88, 34, idBrowseGame)
 
