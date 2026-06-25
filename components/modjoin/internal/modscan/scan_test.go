@@ -182,3 +182,33 @@ func TestMaterialOnlyCompanionStaysMiscForAmbiguousOrGenericNamespace(t *testing
 		t.Fatalf("ambiguous/generic companions should remain misc: %#v", inferred)
 	}
 }
+
+func TestFindMissingWeaponSoundsInfersModelOnlyFirearms(t *testing.T) {
+	packages := []vpkmerge.PackageInfo{
+		{Path: "pistol-model.vpk", Files: []vpkmerge.FileInfo{
+			{Path: "models/v_models/weapons/v_pistol_a.mdl"},
+			{Path: "materials/models/weapons/v_models/pistol/skin.vtf"},
+		}},
+		{Path: "pump-model.vpk", Files: []vpkmerge.FileInfo{
+			{Path: "scripts/weapon_pumpshotgun.txt"},
+		}},
+		{Path: "has-sound.vpk", Files: []vpkmerge.FileInfo{
+			{Path: "models/v_models/weapons/v_pistol_b.mdl"},
+			{Path: "sound/weapons/pistol/gunfire/pistol_fire_1.wav"},
+		}},
+	}
+	missing := findMissingWeaponSounds(packages, map[string]string{
+		"pistol-model.vpk": "weapons",
+		"pump-model.vpk":   "weapons",
+		"has-sound.vpk":    "weapons",
+	})
+	if len(missing) != 2 {
+		t.Fatalf("missing = %#v, want two model-only weapon packages", missing)
+	}
+	if missing[0].Package != "pistol-model.vpk" || !contains(missing[0].Weapons, "pistol") {
+		t.Fatalf("pistol package not inferred correctly: %#v", missing[0])
+	}
+	if missing[1].Package != "pump-model.vpk" || !contains(missing[1].Weapons, "pumpshotgun") {
+		t.Fatalf("pump shotgun package not inferred correctly: %#v", missing[1])
+	}
+}

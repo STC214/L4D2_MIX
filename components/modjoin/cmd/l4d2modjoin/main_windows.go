@@ -772,7 +772,7 @@ func applyWeaponSoundVolume(plan *vpkmerge.Plan, percent int) {
 }
 
 func prepareOfficialWeaponSoundOverlays(plan *vpkmerge.Plan, scanResult *modscan.Result, addonsDir string, percent int) (func(), int, error) {
-	if plan == nil || scanResult == nil || percent == 100 || !scanHasWeaponPackages(scanResult) {
+	if plan == nil || scanResult == nil || percent == 100 || len(scanResult.MissingWeaponSounds) == 0 {
 		return nil, 0, nil
 	}
 	targetIndex := weaponOutputGroupIndex(plan)
@@ -787,17 +787,13 @@ func prepareOfficialWeaponSoundOverlays(plan *vpkmerge.Plan, scanResult *modscan
 	if err != nil {
 		return nil, 0, err
 	}
-	official := map[string]string{}
-	for _, vpkPath := range vpks {
-		info, inspectErr := vpkmerge.Inspect(vpkPath)
-		if inspectErr != nil {
-			return nil, 0, inspectErr
-		}
-		for _, file := range info.Files {
-			if vpkmerge.IsWeaponSoundWAV(file.Path) {
-				official[file.Path] = vpkPath
-			}
-		}
+	index, err := loadOfficialWeaponSoundIndex(vpks)
+	if err != nil {
+		return nil, 0, err
+	}
+	official, err := requireOfficialWeaponSounds(index, missingWeaponList(scanResult.MissingWeaponSounds))
+	if err != nil {
+		return nil, 0, err
 	}
 	if len(official) == 0 {
 		return nil, 0, nil
@@ -820,7 +816,7 @@ func prepareOfficialWeaponSoundOverlays(plan *vpkmerge.Plan, scanResult *modscan
 		if existing[path] || plan.Groups[targetIndex].Overlay[path] != "" {
 			continue
 		}
-		content, readErr := vpkmerge.ReadFile(official[path], path)
+		content, readErr := readOfficialSoundContent(official[path], path)
 		if readErr != nil {
 			cleanup()
 			return nil, 0, readErr
@@ -845,13 +841,26 @@ func prepareOfficialWeaponSoundOverlays(plan *vpkmerge.Plan, scanResult *modscan
 	return cleanup, added, nil
 }
 
-func scanHasWeaponPackages(result *modscan.Result) bool {
-	for _, category := range result.Categories {
-		if category.Key == "weapons" && len(category.Packages) > 0 {
-			return true
+func readOfficialSoundContent(location, path string) ([]byte, error) {
+	if strings.EqualFold(filepath.Ext(location), ".vpk") {
+		return vpkmerge.ReadFile(location, path)
+	}
+	return os.ReadFile(location)
+}
+
+func missingWeaponList(missing []modscan.MissingWeaponSound) []string {
+	needed := map[string]bool{}
+	for _, item := range missing {
+		for _, weapon := range item.Weapons {
+			needed[weapon] = true
 		}
 	}
-	return false
+	var out []string
+	for weapon := range needed {
+		out = append(out, weapon)
+	}
+	sort.Strings(out)
+	return out
 }
 
 func weaponOutputGroupIndex(plan *vpkmerge.Plan) int {
@@ -874,7 +883,7 @@ func officialGameVPKs(addonsDir string) []string {
 	var result []string
 	for _, path := range paths {
 		name := strings.ToLower(filepath.Base(filepath.Dir(path)))
-		if name == "left4dead2" || strings.HasPrefix(name, "left4dead2_") {
+		if name == "left4dead2" || strings.HasPrefix(name, "left4dead2_") || name == "update" {
 			result = append(result, path)
 		}
 	}
@@ -1133,6 +1142,10 @@ func handleEvent(id uint64) {
 		for _, inferred := range result.InferredPackages {
 			logLine(fmt.Sprintf("配套包归类 · %s → %s · %s",
 				inferred.Name, inferred.Category, inferred.Reason))
+		}
+		for _, missing := range result.MissingWeaponSounds {
+			logLine(fmt.Sprintf("武器音效待补入 · %s → %s · %s",
+				missing.Package, strings.Join(missing.Weapons, ", "), missing.Reason))
 		}
 		if len(result.UnknownPackages) > 0 {
 			logLine("未明确识别的 MOD 已放入 Misc：" + strings.Join(result.UnknownPackages, ", "))

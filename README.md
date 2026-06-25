@@ -54,6 +54,8 @@ dist\L4D2_MIX.exe
 - 所有组件允许关闭后，主程序分别发送关闭消息，并等待三个组件进程实际结束后才销毁宿主窗口。
 - 组件在正常关闭后 5 秒仍未退出时才执行超时清理，避免遗留失去父窗口的后台进程。
 
+`MOD 分类合并` 的一键还原会恢复首次部署前的 `addonlist.txt` 基线，并移出当前合并包。还原成功后，工具会清理自己自动创建的 `addonlist.txt.l4d2modjoin.*.bak` 备份文件；如果还原被阻止或失败，这些备份会保留用于后续恢复。
+
 首次运行时，单文件 EXE 会把内置运行组件释放到：
 
 ```text
@@ -101,9 +103,12 @@ data\
 - 命中范围默认为 `sound/weapons/*.wav`。
 - 明确排除非射击武器或物品类目录：`melee`、`chainsaw`、`molotov`、`pipe_bomb`、`vomitjar`、`gascan`、`propanetank`、`oxygentank`、`fireworkcrate`、`cola_bottles`、`first_aid_kit`、`defibrillator`、`adrenaline`、`pain_pills`、`upgradepack`、`ammo_pack`。
 - 因此纯音效 MOD 即使被动态分类到 `【07】Audio.vpk`，只要路径属于射击类武器音效，也会应用同一音量设置；`pistol`、`pump shotgun` 等不会因为不在 `Weapons` 输出组而漏处理。
-- 如果本次扫描存在射击类武器 MOD，但该 MOD 只改模型/材质、没有自带音效，合并时会从当前选择的游戏目录读取官方 VPK（`left4dead2\pak01_dir.vpk` 和 `left4dead2_*\pak01_dir.vpk`），把缺失的官方射击武器 WAV 按原路径复制进 `Weapons` 输出包，再一起应用音量设置。
-- 因为官方音效补入需要读取游戏原始 VPK，使用该功能时 `游戏 Addons 目录` 必须指向真实安装目录下的 `Left 4 Dead 2\left4dead2\addons`。如果路径不正确或官方 `pak01_dir.vpk` 缺失，合并会停止并提示修正目录，而不是静默生成一个缺少官方音效副本的包。
-- 官方音效副本使用原始路径写入，例如 `sound/weapons/pistol/gunfire/pistol_fire_1.wav`。这样即使 MOD 或游戏脚本仍指向原音效路径，启用合并包后也会命中合并包内的降音量副本。
+- 智能扫描会检查每个射击类武器 MOD 是否包含 `sound/weapons` 音效。如果某个武器 MOD 只改模型/材质、没有自带音效，扫描日志会记录“武器音效待补入”和推断出的官方武器类型。
+- 一键分类合并时，工具只针对扫描阶段标记的缺音效武器 MOD，从当前选择的游戏目录读取官方脚本（`scripts/weapon_*.txt` 与 `scripts/game_sounds*.txt`），按游戏自己的 `SoundData -> game_sounds -> wave` 引用链解析对应官方射击武器 WAV，再从官方 VPK 或官方 `sound\weapons` 散文件按原路径复制进 `Weapons` 输出包并一起应用音量设置。已自带 `sound/weapons` 音效的武器 MOD 不会触发官方音效补入。
+- 官方脚本和资源按 L4D2 的 `gameinfo.txt` 搜索路径处理：`update` 优先于 `left4dead2_dlc3`、`left4dead2_dlc2`、`left4dead2_dlc1`，最后才是基础 `left4dead2`。同名 `game_sounds` 事件、同名 `weapon_*.txt` 脚本或同路径散文件存在多份时，工具使用更高优先级目录中的版本，避免拿到旧版官方音效。
+- 官方资源来源包含 `update\pak01_dir.vpk`、`left4dead2_dlc*\pak01_dir.vpk`、`left4dead2\pak01_dir.vpk`，以及这些官方目录下的 `sound\weapons` 散文件。许多官方 WAV 并不在 VPK 内，而是以散文件存在；工具会用官方脚本解析出的路径去两类来源中定位实际文件。
+- 因为官方音效补入需要读取游戏原始脚本和资源，使用该功能时 `游戏 Addons 目录` 必须指向真实安装目录下的 `Left 4 Dead 2\left4dead2\addons`。如果路径不正确、官方 `pak01_dir.vpk` 缺失，或官方脚本无法解析到对应射击武器 WAV，合并会停止并提示修正目录，而不是静默生成一个缺少官方音效副本的包。
+- 官方音效副本使用官方脚本解析出的原始路径写入，例如 `sound/weapons/pistol/gunfire/pistol_fire.wav`。这样即使 MOD 或游戏脚本仍指向原音效路径，启用合并包后也会命中合并包内的降音量副本。
 - 如果任一 MOD 已经提供同一路径的射击武器音效，工具不会用官方音效覆盖它，只会按当前音量设置处理 MOD 自带音效。
 - 支持 PCM/float WAV 的采样缩放。缩放后会按最终内容重新计算 VPK 条目 CRC，保证后续构建清单校验和部署校验仍能通过。
 - 非 WAV、压缩编码或无法识别的音频会保持原样，以避免破坏 VPK。

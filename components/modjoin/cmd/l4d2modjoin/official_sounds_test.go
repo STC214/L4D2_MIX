@@ -27,6 +27,7 @@ func TestPrepareOfficialWeaponSoundOverlaysAddsMissingGameSounds(t *testing.T) {
 	if err := os.WriteFile(officialWAV, testPCM16WAV([]int16{1000}), 0644); err != nil {
 		t.Fatal(err)
 	}
+	weaponScript, gameSoundScript := writeOfficialSoundScripts(t, root, "pistol", "Weapon_Pistol.Single", "sound/weapons/pistol/gunfire/pistol_fire_1.wav")
 	if err := vpkmerge.Run(vpkmerge.Plan{
 		Output: left4dead2,
 		Groups: []vpkmerge.Group{{
@@ -35,6 +36,8 @@ func TestPrepareOfficialWeaponSoundOverlaysAddsMissingGameSounds(t *testing.T) {
 			Overlay: map[string]string{
 				"sound/weapons/pistol/gunfire/pistol_fire_1.wav": officialWAV,
 				"sound/weapons/melee/swing.wav":                  officialWAV,
+				"scripts/weapon_pistol.txt":                      weaponScript,
+				"scripts/game_sounds_weapons.txt":                gameSoundScript,
 			},
 		}},
 	}, nil); err != nil {
@@ -44,6 +47,10 @@ func TestPrepareOfficialWeaponSoundOverlaysAddsMissingGameSounds(t *testing.T) {
 		Directory: source,
 		Categories: []modscan.Category{{
 			Key: "weapons", Output: "04_Weapons.vpk", Title: "Merged Weapons", Packages: []string{"model-only.vpk"},
+		}},
+		MissingWeaponSounds: []modscan.MissingWeaponSound{{
+			Package: "model-only.vpk",
+			Weapons: []string{"pistol"},
 		}},
 	}
 	plan := vpkmerge.Plan{
@@ -101,6 +108,7 @@ func TestPrepareOfficialWeaponSoundOverlaysDoesNotOverrideModSound(t *testing.T)
 	if err := os.WriteFile(modWAV, testPCM16WAV([]int16{2000}), 0644); err != nil {
 		t.Fatal(err)
 	}
+	weaponScript, gameSoundScript := writeOfficialSoundScripts(t, root, "pistol", "Weapon_Pistol.Single", "sound/weapons/pistol/gunfire/pistol_fire_1.wav")
 	if err := vpkmerge.Run(vpkmerge.Plan{
 		Output: left4dead2,
 		Groups: []vpkmerge.Group{{
@@ -108,6 +116,8 @@ func TestPrepareOfficialWeaponSoundOverlaysDoesNotOverrideModSound(t *testing.T)
 			Title:  "Official",
 			Overlay: map[string]string{
 				"sound/weapons/pistol/gunfire/pistol_fire_1.wav": officialWAV,
+				"scripts/weapon_pistol.txt":                      weaponScript,
+				"scripts/game_sounds_weapons.txt":                gameSoundScript,
 			},
 		}},
 	}, nil); err != nil {
@@ -129,6 +139,10 @@ func TestPrepareOfficialWeaponSoundOverlaysDoesNotOverrideModSound(t *testing.T)
 		Directory: source,
 		Categories: []modscan.Category{{
 			Key: "weapons", Output: "04_Weapons.vpk", Title: "Merged Weapons", Packages: []string{"model-and-sound.vpk"},
+		}},
+		MissingWeaponSounds: []modscan.MissingWeaponSound{{
+			Package: "model-and-sound.vpk",
+			Weapons: []string{"pistol"},
 		}},
 	}
 	plan, err := result.Plan(output, nil)
@@ -169,6 +183,10 @@ func TestPrepareOfficialWeaponSoundOverlaysRequiresOfficialVPK(t *testing.T) {
 		Categories: []modscan.Category{{
 			Key: "weapons", Output: "04_Weapons.vpk", Title: "Merged Weapons", Packages: []string{"model-only.vpk"},
 		}},
+		MissingWeaponSounds: []modscan.MissingWeaponSound{{
+			Package: "model-only.vpk",
+			Weapons: []string{"pumpshotgun"},
+		}},
 	}
 	plan := vpkmerge.Plan{Groups: []vpkmerge.Group{{
 		Output: "04_Weapons.vpk",
@@ -178,6 +196,64 @@ func TestPrepareOfficialWeaponSoundOverlaysRequiresOfficialVPK(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "游戏 Addons 目录") {
 		t.Fatalf("expected actionable official VPK error, got %v", err)
 	}
+}
+
+func TestPrepareOfficialWeaponSoundOverlaysErrorsWhenOfficialSoundMissing(t *testing.T) {
+	root := t.TempDir()
+	gameDir := filepath.Join(root, "Left 4 Dead 2")
+	left4dead2 := filepath.Join(gameDir, "left4dead2")
+	addons := filepath.Join(left4dead2, "addons")
+	if err := os.MkdirAll(addons, 0755); err != nil {
+		t.Fatal(err)
+	}
+	officialWAV := filepath.Join(root, "official.wav")
+	if err := os.WriteFile(officialWAV, testPCM16WAV([]int16{1000}), 0644); err != nil {
+		t.Fatal(err)
+	}
+	weaponScript, gameSoundScript := writeOfficialSoundScripts(t, root, "pistol", "Weapon_Pistol.Single", "sound/weapons/pistol/gunfire/pistol_fire_1.wav")
+	if err := vpkmerge.Run(vpkmerge.Plan{
+		Output: left4dead2,
+		Groups: []vpkmerge.Group{{
+			Output: "pak01_dir.vpk",
+			Title:  "Official",
+			Overlay: map[string]string{
+				"sound/weapons/pistol/gunfire/pistol_fire_1.wav": officialWAV,
+				"scripts/weapon_pistol.txt":                      weaponScript,
+				"scripts/game_sounds_weapons.txt":                gameSoundScript,
+			},
+		}},
+	}, nil); err != nil {
+		t.Fatal(err)
+	}
+	result := modscan.Result{
+		MissingWeaponSounds: []modscan.MissingWeaponSound{{
+			Package: "model-only.vpk",
+			Weapons: []string{"pumpshotgun"},
+		}},
+	}
+	plan := vpkmerge.Plan{Groups: []vpkmerge.Group{{
+		Output: "04_Weapons.vpk",
+		Title:  "Merged Weapons",
+	}}}
+	_, _, err := prepareOfficialWeaponSoundOverlays(&plan, &result, addons, 50)
+	if err == nil || !strings.Contains(err.Error(), "pumpshotgun") {
+		t.Fatalf("expected missing official sound error, got %v", err)
+	}
+}
+
+func writeOfficialSoundScripts(t *testing.T, root, weapon, event, wave string) (string, string) {
+	t.Helper()
+	weaponScript := filepath.Join(root, "weapon_"+weapon+".txt")
+	gameSoundScript := filepath.Join(root, "game_sounds_weapons.txt")
+	weaponContent := "\"WeaponData\"\r\n{\r\n\t\"SoundData\"\r\n\t{\r\n\t\t\"single_shot\"\t\"" + event + "\"\r\n\t}\r\n}\r\n"
+	gameSoundContent := "\"" + event + "\"\r\n{\r\n\t\"channel\"\t\"CHAN_WEAPON\"\r\n\t\"wave\"\t\"" + wave + "\"\r\n}\r\n"
+	if err := os.WriteFile(weaponScript, []byte(weaponContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(gameSoundScript, []byte(gameSoundContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+	return weaponScript, gameSoundScript
 }
 
 func testPCM16WAV(samples []int16) []byte {

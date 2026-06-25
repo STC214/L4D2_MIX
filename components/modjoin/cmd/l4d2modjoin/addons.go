@@ -501,8 +501,24 @@ func restoreLatest(addonsDir, stateDir string, progress operationProgress) (stri
 			return "", fmt.Errorf("状态已恢复，但清理旧版部署清单失败: %w", err)
 		}
 	}
+	if err := removeAddonListBackups(matches); err != nil {
+		return "", fmt.Errorf("状态已恢复，但清理 addonlist 备份失败: %w", err)
+	}
 	reportProgress(progress, 100, 100, "还原 · 已完成")
 	return baseline, nil
+}
+
+func removeAddonListBackups(paths []string) error {
+	var failures []string
+	for _, path := range paths {
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			failures = append(failures, fmt.Sprintf("%s: %v", filepath.Base(path), err))
+		}
+	}
+	if len(failures) > 0 {
+		return fmt.Errorf("%s", strings.Join(failures, "; "))
+	}
+	return nil
 }
 
 func loadDeploymentRegistry(stateDir string) (deploymentRegistry, error) {

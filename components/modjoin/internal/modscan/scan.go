@@ -43,15 +43,22 @@ type InferredPackage struct {
 	Reason   string
 }
 
+type MissingWeaponSound struct {
+	Package string
+	Weapons []string
+	Reason  string
+}
+
 type Result struct {
-	Directory        string
-	Packages         []vpkmerge.PackageInfo
-	Categories       []Category
-	Conflicts        []Conflict
-	ConflictGroups   []ConflictGroup
-	UnknownPackages  []string
-	InferredPackages []InferredPackage
-	Fingerprint      string
+	Directory           string
+	Packages            []vpkmerge.PackageInfo
+	Categories          []Category
+	Conflicts           []Conflict
+	ConflictGroups      []ConflictGroup
+	UnknownPackages     []string
+	InferredPackages    []InferredPackage
+	MissingWeaponSounds []MissingWeaponSound
+	Fingerprint         string
 }
 
 type ownerEntry struct {
@@ -128,6 +135,7 @@ func Scan(directory string) (Result, error) {
 		return Result{}, fmt.Errorf("目录中没有未合并的源 MOD")
 	}
 	result.InferredPackages = refineMaterialCompanions(result.Packages, packageCategory)
+	result.MissingWeaponSounds = findMissingWeaponSounds(result.Packages, packageCategory)
 	result.UnknownPackages = result.UnknownPackages[:0]
 	for _, info := range result.Packages {
 		name := filepath.Base(info.Path)
@@ -220,6 +228,93 @@ func refineMaterialCompanions(packages []vpkmerge.PackageInfo, categories map[st
 	}
 	sort.Slice(inferred, func(i, j int) bool { return inferred[i].Name < inferred[j].Name })
 	return inferred
+}
+
+func findMissingWeaponSounds(packages []vpkmerge.PackageInfo, categories map[string]string) []MissingWeaponSound {
+	var missing []MissingWeaponSound
+	for _, info := range packages {
+		name := filepath.Base(info.Path)
+		if categories[name] != "weapons" || packageHasWeaponSound(info) {
+			continue
+		}
+		weapons := inferShootingWeapons(info)
+		if len(weapons) == 0 {
+			continue
+		}
+		missing = append(missing, MissingWeaponSound{
+			Package: name,
+			Weapons: weapons,
+			Reason:  "射击类武器 MOD 未包含 sound/weapons 音效，将在合并时补入对应官方音效",
+		})
+	}
+	sort.Slice(missing, func(i, j int) bool { return missing[i].Package < missing[j].Package })
+	return missing
+}
+
+func packageHasWeaponSound(info vpkmerge.PackageInfo) bool {
+	for _, file := range info.Files {
+		if vpkmerge.IsWeaponSoundWAV(file.Path) {
+			return true
+		}
+	}
+	return false
+}
+
+func inferShootingWeapons(info vpkmerge.PackageInfo) []string {
+	var builder strings.Builder
+	for _, file := range info.Files {
+		builder.WriteByte('\n')
+		builder.WriteString(file.Path)
+	}
+	value := builder.String()
+	var weapons []string
+	for _, candidate := range shootingWeaponHints {
+		for _, hint := range candidate.hints {
+			if strings.Contains(value, hint) {
+				weapons = append(weapons, candidate.name)
+				break
+			}
+		}
+	}
+	return compactWeaponNames(weapons)
+}
+
+var shootingWeaponHints = []struct {
+	name  string
+	hints []string
+}{
+	{"grenade_launcher", []string{"weapon_grenade_launcher", "grenade_launcher", "grenadelauncher"}},
+	{"rifle_m60", []string{"weapon_rifle_m60", "machinegun_m60", "rifle_m60", "m60"}},
+	{"pistol_magnum", []string{"weapon_pistol_magnum", "pistol_magnum", "magnum", "desert_eagle"}},
+	{"pumpshotgun", []string{"weapon_pumpshotgun", "pumpshotgun", "pump_shotgun", "pump-shotgun"}},
+	{"shotgun_chrome", []string{"weapon_shotgun_chrome", "shotgun_chrome", "chrome_shotgun"}},
+	{"autoshotgun", []string{"weapon_autoshotgun", "autoshotgun", "auto_shotgun"}},
+	{"shotgun_spas", []string{"weapon_shotgun_spas", "shotgun_spas", "spas"}},
+	{"smg_silenced", []string{"weapon_smg_silenced", "smg_silenced", "silenced_smg"}},
+	{"smg_mp5", []string{"weapon_smg_mp5", "smg_mp5", "mp5"}},
+	{"rifle_ak47", []string{"weapon_rifle_ak47", "rifle_ak47", "ak47"}},
+	{"rifle_desert", []string{"weapon_rifle_desert", "rifle_desert", "scar"}},
+	{"rifle_sg552", []string{"weapon_rifle_sg552", "rifle_sg552", "sg552"}},
+	{"sniper_military", []string{"weapon_sniper_military", "sniper_military", "military_sniper"}},
+	{"sniper_awp", []string{"weapon_sniper_awp", "sniper_awp", "awp"}},
+	{"sniper_scout", []string{"weapon_sniper_scout", "sniper_scout", "scout"}},
+	{"hunting_rifle", []string{"weapon_hunting_rifle", "hunting_rifle"}},
+	{"pistol", []string{"weapon_pistol", "/pistol", "v_pistol", "w_pistol"}},
+	{"smg", []string{"weapon_smg", "/smg", "v_smg", "w_smg"}},
+	{"rifle", []string{"weapon_rifle", "/rifle", "v_rifle", "w_rifle"}},
+}
+
+func compactWeaponNames(values []string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, value := range values {
+		if !seen[value] {
+			seen[value] = true
+			out = append(out, value)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 func isMaterialOnlyPackage(info vpkmerge.PackageInfo) bool {

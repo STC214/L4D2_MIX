@@ -207,6 +207,10 @@ func TestRestoreMovesCurrentMergedPackagesOutOfAddons(t *testing.T) {
 	if err := os.WriteFile(backup, []byte(original), 0644); err != nil {
 		t.Fatal(err)
 	}
+	newerBackup := addonList + ".l4d2modjoin.20260202-000000.000000000.bak"
+	if err := os.WriteFile(newerBackup, []byte("\"AddonList\"\r\n{\r\n\t\"04_Weapons.vpk\"\t\"1\"\r\n}\r\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := restoreLatest(addons, stateDir, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -216,6 +220,13 @@ func TestRestoreMovesCurrentMergedPackagesOutOfAddons(t *testing.T) {
 	data, _ := os.ReadFile(addonList)
 	if string(data) != original {
 		t.Fatalf("addonlist was not restored:\n%s", data)
+	}
+	matches, err := filepath.Glob(addonList + ".l4d2modjoin.*.bak")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(matches) != 0 {
+		t.Fatalf("addonlist backups were not cleaned: %#v", matches)
 	}
 }
 
