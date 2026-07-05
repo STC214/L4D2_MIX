@@ -1,0 +1,49 @@
+# Built release and runtime-generated user data
+/dist/
+/data/
+
+# Host and embedded component build outputs
+/app.syso
+/payload/L4D2AutobhopVPKW.exe
+/payload/L4D2RowFilterManager.exe
+/payload/L4D2ModJoin.exe
+/components/**/L4D2*.exe
+
+# Runtime logs and temporary replacement files
+*.log
+*.tmp
+*.tmp.*
+*.new
+*.bak
+*.old
+*.exe~
+
+# Go build/test artifacts and project-local caches
+*.test
+*.test.exe
+*.out
+/coverage/
+/.tmp/
+/.cache/
+/.gocache/
+/.gotmp/
+
+# Local verification output
+/switch-results.json
+/ui-verify/
+/*-results.json
+/*-check.png
+
+# Local MOD work/output directories if created beside the app
+/merged/
+/workshop/
+/l4d2modjoin_old/
+
+# Editors and operating-system metadata
+.DS_Store
+Thumbs.db
+Desktop.ini
+.idea/
+.vscode/
+*.user
+*.suo
