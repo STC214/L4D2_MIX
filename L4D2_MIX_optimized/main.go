@@ -26,6 +26,7 @@ const (
 	appTitle = "L4D2 MIX"
 
 	WM_CREATE         = 0x0001
+	WM_NULL           = 0x0000
 	WM_DESTROY        = 0x0002
 	WM_SIZE           = 0x0005
 	WM_CLOSE          = 0x0010
@@ -76,12 +77,24 @@ const (
 	ID_PAGE_BHOP   = 101
 	ID_PAGE_FILTER = 102
 	ID_PAGE_MODS   = 103
+	ID_TRAY_INJECT = 201
+	ID_TRAY_CLEAN  = 202
+	ID_TRAY_SHOW   = 203
+	ID_TRAY_EXIT   = 204
+
+	ID_ROW_FILTER_START = 1003
+	ID_ROW_FILTER_CLEAN = 1010
 
 	NIM_ADD     = 0
 	NIM_DELETE  = 2
 	NIF_MESSAGE = 1
 	NIF_ICON    = 2
 	NIF_TIP     = 4
+
+	MF_STRING       = 0x0000
+	MF_SEPARATOR    = 0x0800
+	TPM_RIGHTBUTTON = 0x0002
+	TPM_RETURNCMD   = 0x0100
 
 	TRANSPARENT   = 1
 	DT_LEFT       = 0x0000
@@ -130,6 +143,11 @@ var (
 	procIsWindowEnabled          = user32.NewProc("IsWindowEnabled")
 	procSetWindowPos             = user32.NewProc("SetWindowPos")
 	procSetForegroundWindow      = user32.NewProc("SetForegroundWindow")
+	procGetCursorPos             = user32.NewProc("GetCursorPos")
+	procCreatePopupMenu          = user32.NewProc("CreatePopupMenu")
+	procAppendMenuW              = user32.NewProc("AppendMenuW")
+	procTrackPopupMenu           = user32.NewProc("TrackPopupMenu")
+	procDestroyMenu              = user32.NewProc("DestroyMenu")
 	procEnableWindow             = user32.NewProc("EnableWindow")
 	procRedrawWindow             = user32.NewProc("RedrawWindow")
 	procFillRect                 = user32.NewProc("FillRect")
@@ -353,6 +371,7 @@ func wndProc(hwnd uintptr, message uint32, wParam, lParam uintptr) uintptr {
 		createControls(hwnd)
 		layout(hwnd)
 		setPage(0)
+		addTrayIcon()
 		go prepareAndLaunchChildren()
 		return 0
 	case WM_COMMAND:
@@ -396,8 +415,10 @@ func wndProc(hwnd uintptr, message uint32, wParam, lParam uintptr) uintptr {
 		return 0
 	case WM_TRAY_ICON:
 		switch uint32(lParam) {
-		case WM_LBUTTONUP, WM_LBUTTONDBLCLK, WM_RBUTTONUP:
+		case WM_LBUTTONUP, WM_LBUTTONDBLCLK:
 			restoreFromTray()
+		case WM_RBUTTONUP:
+			showTrayMenu()
 		}
 		return 0
 	case WM_ERASEBKGND:
@@ -883,6 +904,10 @@ func requestClose() {
 	if modHwnd != 0 {
 		canClose, _, _ := procSendMessageW.Call(modHwnd, WM_MIX_CAN_CLOSE, 0, 0)
 		if canClose == 0 {
+			visible, _, _ := procIsWindowVisible.Call(app.hwnd)
+			if visible == 0 {
+				restoreFromTray()
+			}
 			setPage(2)
 			setStatus("MOD 分类合并任务或冲突处理仍在进行，请完成后再关闭。")
 			return
@@ -1151,12 +1176,71 @@ func minimizeToTray() {
 }
 
 func restoreFromTray() {
-	deleteTrayIcon()
 	procShowWindow.Call(app.hwnd, SW_SHOW)
 	procShowWindow.Call(app.hwnd, SW_MAXIMIZE)
 	refreshAfterRestore()
 	procSetForegroundWindow.Call(app.hwnd)
 	procUpdateWindow.Call(app.hwnd)
+}
+
+func showTrayMenu() {
+	menu, _, _ := procCreatePopupMenu.Call()
+	if menu == 0 {
+		return
+	}
+	defer procDestroyMenu.Call(menu)
+	appendTrayMenuItem(menu, ID_TRAY_INJECT, "注入启动")
+	appendTrayMenuItem(menu, ID_TRAY_CLEAN, "纯净启动")
+	procAppendMenuW.Call(menu, MF_SEPARATOR, 0, 0)
+	appendTrayMenuItem(menu, ID_TRAY_SHOW, "显示窗口")
+	procAppendMenuW.Call(menu, MF_SEPARATOR, 0, 0)
+	appendTrayMenuItem(menu, ID_TRAY_EXIT, "退出")
+
+	var cursor point
+	if ret, _, _ := procGetCursorPos.Call(uintptr(unsafe.Pointer(&cursor))); ret == 0 {
+		return
+	}
+	procSetForegroundWindow.Call(app.hwnd)
+	command, _, _ := procTrackPopupMenu.Call(
+		menu,
+		TPM_RIGHTBUTTON|TPM_RETURNCMD,
+		uintptr(cursor.X), uintptr(cursor.Y),
+		0, app.hwnd, 0,
+	)
+	// Required for notification-area context menus so Windows reliably
+	// dismisses the menu before the next tray interaction.
+	procPostMessageW.Call(app.hwnd, WM_NULL, 0, 0)
+	switch command {
+	case ID_TRAY_INJECT:
+		triggerRowFilterCommand(ID_ROW_FILTER_START, "注入启动")
+	case ID_TRAY_CLEAN:
+		triggerRowFilterCommand(ID_ROW_FILTER_CLEAN, "纯净启动")
+	case ID_TRAY_SHOW:
+		restoreFromTray()
+	case ID_TRAY_EXIT:
+		requestClose()
+	}
+}
+
+func appendTrayMenuItem(menu uintptr, id uintptr, label string) {
+	procAppendMenuW.Call(menu, MF_STRING, id, uintptr(unsafe.Pointer(utf16(label))))
+}
+
+func triggerRowFilterCommand(command uintptr, label string) {
+	app.mu.Lock()
+	rowFilterHwnd := app.children[1].hwnd
+	ready := app.children[1].ready
+	app.mu.Unlock()
+	if !ready || rowFilterHwnd == 0 {
+		setStatus("组服务器过滤器仍在加载，稍后再试。")
+		return
+	}
+	posted, _, _ := procPostMessageW.Call(rowFilterHwnd, WM_COMMAND, command, 0)
+	if posted == 0 {
+		setStatus("组服务器过滤器已退出或暂时不可用。")
+		return
+	}
+	setStatus("已从托盘触发" + label + "。")
 }
 
 func refreshAfterRestore() {

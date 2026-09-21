@@ -85,6 +85,7 @@ const (
 	ID_FOLDER  = 1007
 	ID_ADD_IP  = 1008
 	ID_ADD_KEY = 1009
+	ID_CLEAN   = 1010
 	ID_TIMER   = 2001
 
 	WM_APP_EVENT = WM_APP + 1
@@ -245,6 +246,7 @@ type appState struct {
 	restoreBtn uintptr
 	saveBtn    uintptr
 	startBtn   uintptr
+	cleanBtn   uintptr
 	injectBtn  uintptr
 	refreshBtn uintptr
 	openLogBtn uintptr
@@ -475,10 +477,11 @@ func createControls(hwnd uintptr) {
 	app.restoreBtn = button(hwnd, "恢复默认", 42, 626, 112, 32, ID_RESTORE)
 	app.saveBtn = button(hwnd, "保存配置", 166, 626, 112, 32, ID_SAVE)
 	app.startBtn = button(hwnd, "启动并注入", 308, 626, 124, 32, ID_START)
-	app.injectBtn = button(hwnd, "注入运行中游戏", 444, 626, 132, 32, ID_INJECT)
-	app.refreshBtn = button(hwnd, "刷新日志", 596, 626, 112, 32, ID_REFRESH)
-	app.openLogBtn = button(hwnd, "打开日志", 720, 626, 112, 32, ID_OPENLOG)
-	app.folderBtn = button(hwnd, "打开组件目录", 844, 626, 112, 32, ID_FOLDER)
+	app.cleanBtn = button(hwnd, "纯净启动", 438, 626, 112, 32, ID_CLEAN)
+	app.injectBtn = button(hwnd, "注入运行中游戏", 556, 626, 132, 32, ID_INJECT)
+	app.refreshBtn = button(hwnd, "刷新日志", 694, 626, 112, 32, ID_REFRESH)
+	app.openLogBtn = button(hwnd, "打开日志", 812, 626, 112, 32, ID_OPENLOG)
+	app.folderBtn = button(hwnd, "打开组件目录", 930, 626, 112, 32, ID_FOLDER)
 }
 
 func handleCommand(id int) {
@@ -497,6 +500,15 @@ func handleCommand(id int) {
 		runBackground("启动并注入", false, true, func(ctx context.Context) error {
 			return runPowerShell(ctx, filepath.Join(dllDir(), "launch_row_filter_early_admin.ps1"))
 		})
+	case ID_CLEAN:
+		app.mu.Lock()
+		busy := app.busy
+		app.mu.Unlock()
+		if busy {
+			queueLog("已有任务正在运行，纯净启动已跳过。")
+			return
+		}
+		launchCleanGame()
 	case ID_INJECT:
 		runBackground("注入运行中游戏", false, true, func(ctx context.Context) error {
 			return runPowerShell(ctx, filepath.Join(dllDir(), "load_row_filter_admin.ps1"))
@@ -508,6 +520,20 @@ func handleCommand(id int) {
 	case ID_FOLDER:
 		openPath(dllDir())
 	}
+}
+
+func launchCleanGame() {
+	ret, _, _ := procShellExecute.Call(
+		app.hwnd,
+		uintptr(unsafe.Pointer(utf16Ptr("open"))),
+		uintptr(unsafe.Pointer(utf16Ptr("steam://run/550"))),
+		0, 0, SW_SHOWNORMAL,
+	)
+	if ret <= 32 {
+		queueLog(fmt.Sprintf("纯净启动失败：ShellExecuteW=%d", ret))
+		return
+	}
+	queueLog("已请求 Steam 纯净启动游戏。")
 }
 
 func loadConfigsToUI() {
@@ -694,7 +720,7 @@ func drainEventsToUI() {
 }
 
 func setBusy(busy bool) {
-	for _, h := range []uintptr{app.restoreBtn, app.saveBtn, app.startBtn, app.injectBtn} {
+	for _, h := range []uintptr{app.restoreBtn, app.saveBtn, app.startBtn, app.cleanBtn, app.injectBtn} {
 		enable(h, !busy)
 	}
 }
@@ -848,6 +874,8 @@ func buttonStyle(id int) (uint32, uint32, string) {
 		return rgb(31, 68, 58), rgb(112, 216, 146), "保存配置"
 	case ID_START:
 		return rgb(30, 72, 56), rgb(111, 222, 145), "启动并注入"
+	case ID_CLEAN:
+		return rgb(31, 68, 58), rgb(112, 216, 146), "纯净启动"
 	case ID_INJECT:
 		return rgb(31, 59, 78), rgb(76, 196, 236), "注入运行中游戏"
 	case ID_REFRESH:
@@ -921,7 +949,8 @@ func createChild(exStyle uint32, class, text string, style uint32, x, y, w, h in
 func layout(hwnd uintptr) {
 	var r rect
 	procGetClientRect.Call(hwnd, uintptr(unsafe.Pointer(&r)))
-	width := r.Right - r.Left
+	clientWidth := r.Right - r.Left
+	width := clientWidth
 	height := r.Bottom - r.Top
 	if width < 980 {
 		width = 980
@@ -954,15 +983,23 @@ func layout(hwnd uintptr) {
 	move(app.logEdit, rightX+22, top+270, rightW-44, mainH-288)
 	buttonY := height - 58
 	x := int32(42)
-	for _, item := range []struct {
+	buttons := []struct {
 		h uintptr
 		w int32
 	}{
-		{app.restoreBtn, 104}, {app.saveBtn, 104}, {app.startBtn, 116}, {app.injectBtn, 140},
+		{app.restoreBtn, 96}, {app.saveBtn, 96}, {app.startBtn, 112}, {app.cleanBtn, 96}, {app.injectBtn, 132},
 		{app.refreshBtn, 104}, {app.openLogBtn, 104}, {app.folderBtn, 128},
-	} {
-		move(item.h, x, buttonY, item.w, 32)
-		x += item.w + 14
+	}
+	const baseButtonWidth int32 = 868
+	const buttonGap int32 = 10
+	buttonSpace := clientWidth - x - 24 - buttonGap*int32(len(buttons)-1)
+	if buttonSpace < 600 {
+		buttonSpace = 600
+	}
+	for _, item := range buttons {
+		buttonWidth := item.w * buttonSpace / baseButtonWidth
+		move(item.h, x, buttonY, buttonWidth, 32)
+		x += buttonWidth + buttonGap
 	}
 }
 
