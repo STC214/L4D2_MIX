@@ -494,7 +494,7 @@ func createControls(hwnd uintptr) {
 
 	app.headerTitle = child("STATIC", "L4D2 MIX", SS_LEFT, 28, 16, 300, 38, hwnd, 0)
 	setFont(app.headerTitle, app.titleFont)
-	app.headerSub = child("STATIC", "连跳辅助 + 组服务器过滤 + MOD 分类合并  /  一站式控制台", SS_LEFT, 28, 57, 760, 26, hwnd, 0)
+	app.headerSub = child("STATIC", "组服务器过滤 + 连跳辅助 + MOD 分类合并  /  一站式控制台", SS_LEFT, 28, 57, 760, 26, hwnd, 0)
 	app.status = child("STATIC", "正在准备内置组件…", SS_LEFT, 0, 25, 500, 28, hwnd, 0)
 
 	app.sidebar = child(darkPanelClass, "", WS_CLIPCHILDREN|WS_CLIPSIBLINGS, 0, 96, 232, 700, hwnd, 0)
@@ -506,9 +506,11 @@ func createControls(hwnd uintptr) {
 		loadingLabels[i] = child("STATIC", "正在加载"+app.children[i].name+"…", SS_LEFT, 280, 138, 760, 40, hwnd, 0)
 		setFont(loadingLabels[i], app.font)
 	}
-	app.bhopBtn = child("BUTTON", "连跳辅助", BS_OWNERDRAW|WS_TABSTOP, 20, 130, 192, 56, hwnd, ID_PAGE_BHOP)
-	app.filterBtn = child("BUTTON", "组服务器过滤", BS_OWNERDRAW|WS_TABSTOP, 20, 198, 192, 56, hwnd, ID_PAGE_FILTER)
-	app.modsBtn = child("BUTTON", "MOD 分类合并", BS_OWNERDRAW|WS_TABSTOP, 20, 266, 192, 56, hwnd, ID_PAGE_MODS)
+	// Navigation belongs to the sidebar, not to the host as an overlapping
+	// sibling. A normal dark panel claims HTCLIENT and would intercept hits.
+	app.filterBtn = child("BUTTON", "组服务器过滤", BS_OWNERDRAW|WS_TABSTOP, 20, 34, 192, 56, app.sidebar, ID_PAGE_FILTER)
+	app.bhopBtn = child("BUTTON", "连跳辅助", BS_OWNERDRAW|WS_TABSTOP, 20, 102, 192, 56, app.sidebar, ID_PAGE_BHOP)
+	app.modsBtn = child("BUTTON", "MOD 分类合并", BS_OWNERDRAW|WS_TABSTOP, 20, 170, 192, 56, app.sidebar, ID_PAGE_MODS)
 }
 
 func layout(hwnd uintptr) {
@@ -521,9 +523,10 @@ func layout(hwnd uintptr) {
 	move(app.headerSub, 28, 57, 760, 26)
 	move(app.status, w-540, 28, 508, 30)
 	move(app.sidebar, 0, 96, 232, h-96)
-	move(app.bhopBtn, 20, 130, 192, 56)
-	move(app.filterBtn, 20, 198, 192, 56)
-	move(app.modsBtn, 20, 266, 192, 56)
+	// Coordinates are relative to the sidebar (host y = sidebar y + button y).
+	move(app.filterBtn, 20, 34, 192, 56)
+	move(app.bhopBtn, 20, 102, 192, 56)
+	move(app.modsBtn, 20, 170, 192, 56)
 	move(app.content, 248, 106, w-276, h-128)
 	for _, label := range loadingLabels {
 		move(label, 280, 138, w-340, 40)
@@ -1357,6 +1360,9 @@ func refreshAfterRestore() {
 func forceRefreshCurrentPage() {
 	r := clientRect(app.content)
 	pageW, pageH := r.Right-r.Left, r.Bottom-r.Top
+	// Capture the component's current enabled state, not the stale state from
+	// its previous activation (it may have disabled itself during a task).
+	deactivatePage(app.current)
 	for i := range app.children {
 		if i != app.current {
 			deactivatePage(i)
@@ -1374,23 +1380,7 @@ func forceRefreshCurrentPage() {
 		procRedrawWindow.Call(app.content, 0, 0, RDW_INVALIDATE|RDW_ERASE|RDW_ALLCHILDREN|RDW_UPDATENOW)
 		procShowWindow.Call(host, SW_SHOW)
 	}
-	app.mu.Lock()
-	childHwnd := app.children[app.current].hwnd
-	enabledBeforeHide := app.children[app.current].enabledBeforeHide
-	app.children[app.current].active = false
-	app.mu.Unlock()
-	if childHwnd != 0 {
-		procShowWindow.Call(childHwnd, SW_HIDE)
-		procSetWindowPos.Call(childHwnd, 0, 0, 0, uintptr(pageW), uintptr(pageH), SWP_NOZORDER)
-		if enabledBeforeHide {
-			procEnableWindow.Call(childHwnd, 1)
-		}
-		procShowWindow.Call(childHwnd, SW_SHOW)
-		app.mu.Lock()
-		app.children[app.current].active = true
-		app.mu.Unlock()
-		procRedrawWindow.Call(childHwnd, 0, 0, RDW_INVALIDATE|RDW_ERASE|RDW_ALLCHILDREN|RDW_UPDATENOW)
-	}
+	activatePage(app.current, pageW, pageH)
 }
 
 func refreshCurrentPage() {

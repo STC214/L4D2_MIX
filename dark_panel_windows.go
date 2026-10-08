@@ -35,6 +35,13 @@ func darkPanelBrush(hwnd uintptr) uintptr {
 }
 func darkPanelWndProc(hwnd uintptr, message uint32, wParam, lParam uintptr) uintptr {
 	switch message {
+	case WM_COMMAND, WM_DRAWITEM:
+		if hwnd == app.sidebar {
+			// Buttons now have a real container parent. Keep the host's command
+			// dispatch and owner-draw handlers as the single source of behavior.
+			ret, _, _ := procSendMessageW.Call(app.hwnd, uintptr(message), wParam, lParam)
+			return ret
+		}
 	case WM_ERASEBKGND:
 		fillRect(wParam, clientRect(hwnd), darkPanelBrush(hwnd))
 		return 1

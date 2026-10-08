@@ -44,6 +44,22 @@ public static class MixVerify {
     [DllImport("user32.dll")]
     public static extern IntPtr GetDlgItem(IntPtr parent, int id);
 
+    [DllImport("user32.dll")]
+    public static extern IntPtr GetParent(IntPtr hwnd);
+
+    public static IntPtr FindNavigationButton(IntPtr host, int id) {
+        IntPtr found = GetDlgItem(host, id);
+        if (found != IntPtr.Zero) return found;
+        EnumChildWindows(host, (child, unused) => {
+            if (GetParent(child) == host) {
+                found = GetDlgItem(child, id);
+                if (found != IntPtr.Zero) return false;
+            }
+            return true;
+        }, IntPtr.Zero);
+        return found;
+    }
+
     [StructLayout(LayoutKind.Sequential)]
     public struct Rect {
         public int Left;
@@ -105,8 +121,8 @@ if (!$process) {
     throw "L4D2_MIX process with a main window was not found."
 }
 $tabs = @(
-    @{ Name = "bhop"; ID = 101 },
     @{ Name = "filter"; ID = 102 },
+    @{ Name = "bhop"; ID = 101 },
     @{ Name = "mods"; ID = 103 }
 )
 $results = @()
@@ -114,7 +130,8 @@ foreach ($iteration in 1..30) {
     $tab = $tabs[($iteration - 1) % $tabs.Count]
     $selected = $tab.Name
     $buttonID = $tab.ID
-    $button = [MixVerify]::GetDlgItem([IntPtr]$process.MainWindowHandle, $buttonID)
+    $button = [MixVerify]::FindNavigationButton([IntPtr]$process.MainWindowHandle, $buttonID)
+    if ($button -eq [IntPtr]::Zero) { throw "Navigation button not found: $buttonID" }
     [void][MixVerify]::SendMessage($button, 0x00F5, [IntPtr]::Zero, [IntPtr]::Zero)
     Start-Sleep -Milliseconds 80
 

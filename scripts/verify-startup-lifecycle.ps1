@@ -12,6 +12,19 @@ public static class StartupProbe {
     [DllImport("user32.dll")] public static extern IntPtr GetProp(IntPtr h, string s);
     [DllImport("user32.dll")] public static extern IntPtr SendMessage(IntPtr h, uint m, IntPtr w, IntPtr l);
     [DllImport("user32.dll")] public static extern IntPtr GetDlgItem(IntPtr h, int id);
+    [DllImport("user32.dll")] public static extern IntPtr GetParent(IntPtr h);
+    public static IntPtr FindNavigationButton(IntPtr host, int id) {
+        IntPtr found = GetDlgItem(host, id);
+        if (found != IntPtr.Zero) return found;
+        EnumChildWindows(host, (child, unused) => {
+            if (GetParent(child) == host) {
+                found = GetDlgItem(child, id);
+                if (found != IntPtr.Zero) return false;
+            }
+            return true;
+        }, IntPtr.Zero);
+        return found;
+    }
     [DllImport("user32.dll")] public static extern int GetWindowLong(IntPtr h, int n);
     [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
     [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr h, uint m, IntPtr w, IntPtr l);
@@ -80,7 +93,8 @@ try {
   if($filter.Count -ne 1){throw 'fixture filter process mismatch'}
   $filter[0].Kill(); [void]$filter[0].WaitForExit(5000)
   Start-Sleep -Milliseconds 200
-  $button=[StartupProbe]::GetDlgItem($h,102)
+  $button=[StartupProbe]::FindNavigationButton($h,102)
+  if($button -eq [IntPtr]::Zero){throw 'Navigation button not found: 102'}
   [void][StartupProbe]::SendMessage($button,0xF5,[IntPtr]::Zero,[IntPtr]::Zero)
   $p.Refresh(); if(-not $p.Responding){throw 'host unresponsive after child exit'}
   $results += [pscustomobject]@{Switches=30;TrayRestore=$true;ChildExitHandled=$true}
