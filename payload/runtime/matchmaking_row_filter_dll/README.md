@@ -1,170 +1,59 @@
-# Matchmaking Row Filter DLL
+# Matchmaking Row Filter：原版运行载荷
 
-Research prototype for suppressing Steam group-server row updates.
+[原版项目说明](../../../README.md) · [Loader 运行说明](../matchmaking_probe_loader/README.md)
 
-Current idea:
+文档更新：2026-10-08（Asia/Shanghai）。这里是根目录原版的预构建过滤器载荷，不包含优化版的启动缓存和首帧修复。
 
-- Observe `matchmaking.dll + 0x21ECB`, where `Server/connectstring` is available.
-- Default mode is `neutralize_keyword_then_late_skip`: when `rpg` is found near
-  the `0x21B80` detail object, replace the matched ASCII bytes with underscores,
-  then still use the late `server/update` skip as a fallback.
-- Keyword neutralization scans bounded writable, non-image memory at the detail
-  object and its first-level pointer fields. The earlier recursive/de-duplicated
-  walk regressed visible replacement and is not used by default.
-- The current experiment also performs a bounded second-level scan only under
-  high-frequency `arg0` fields observed in prior logs.
-- Optional `early_consume_skip` can be enabled with `row_filter_mode.txt`, but
-  it is currently known to be crash-prone and should only be used for controlled
-  research.
-- Also logs `matchmaking.dll + 0x211E0` group-refresh entries, so a run can
-  distinguish new refresh work from old UI/cache rows.
-- Also observes `matchmaking.dll + 0x21B80` entry and correlates its `ECX`,
-  return address, and first stack argument with later blocked connect strings.
-- Also logs a bounded sample from nearby callback-table functions
-  `matchmaking.dll + 0x219D0` and `matchmaking.dll + 0x22120` as `table probe`.
-  This is diagnostic only and does not change execution.
-- Also arms read-only `client.dll` UI-path probes found by
-  `client_ui_path_scout`. These look for keyword-bearing objects near likely
-  row/text-cache functions and log only positive hits as `client ui keyword
-  probe`.
-- Loads `blocked_keywords.txt` and performs a bounded keyword scan around the
-  `0x21B80` entry objects. This is meant for stable rules such as server names
-  and family tags, instead of volatile IP:port values.
-- Keyword hit logs include `source`, `field`, `direct`, and `ptr`, which identify
-  where the first keyword copy was found before neutralization.
-- Deep-scan logs include `neutralized_arg0_deep` and `deep=...` summaries such as
-  `f8.s3=1`.
-- Client UI probe logs include:
-  - `name=client_groupserver_candidate`
-  - `name=client_row_field_candidate`
-  - `name=client_row_submit_candidate`
-  - `name=client_server_name_candidate`
-  - `name=client_server_row_candidate`
-  - `name=client_thirdparty_panel_setup`
-  - `source=ecx|arg0|arg1`
-  - `field`, `direct`, and `ptr` for the first keyword copy found near that
-    source object.
-  - `ui_neutralized` and `total_ui_neutralized` when the current UI-side
-    server-name experiment changes a mutable keyword copy.
-- Logs up to 128 unique observed connect strings as `seen connectstring`.
-- Logs unique blocked connect strings as `new blocked connectstring`.
+## 文件与模式
 
-This is not a Workshop-safe VPK mod. It is a local research prototype.
+`matchmaking_row_filter.dll` 为 x86，配合同架构 Loader 在 32 位游戏进程中运行。DLL 独立源码、`build_msvc_x86.bat` 和历史研究工具未包含在本仓库；主项目打包嵌入现有运行文件，不重新编译 DLL。
 
-Build:
+随包 `row_filter_mode.txt` 当前内容是 **`steam_serverlist_drop`**。它是当前分发配置；旧文档中的 `neutralize_keyword_then_late_skip` 等研究模式或模块偏移，不应当作当前默认值或跨版本保证。实际加载模式及结果请查看运行日志。
+
+可编辑规则：
+
+| 文件 | 用途 |
+| --- | --- |
+| `blocked_keywords.txt` | 关键字列表 |
+| `blocked_connectstrings.txt` | 手工永久地址列表 |
+| `learned_connectstrings.txt` | 学习地址列表 |
+| `auto_derived_connectstrings.txt` | 运行时派生地址列表 |
+| `row_filter_mode.txt` | 当前模式 |
+
+这些 TXT 是运行数据，不是 Markdown 文档。关键字匹配的 ASCII 大小写行为、派生和匹配结果以对应 DLL 的日志为准；文档更新不修改规则或 DLL。
+
+## 使用实际运行目录
+
+融合 EXE 首次运行把过滤器运行文件释放到 EXE 同级 `data/row-filter`；Loader 位于相邻 `data/matchmaking_probe_loader`。管理界面、DLL 和脚本共同使用这份规则，源码 `payload/runtime` 是打包载荷，不是用户应编辑的运行目录。
+
+在实际 EXE 所在目录执行：
 
 ```powershell
-cmd /s /c "call ""C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvarsall.bat"" x86 && build_msvc_x86.bat"
+# 对已运行的游戏加载
+& .\data\row-filter\load_row_filter_admin.ps1
+
+# 启动游戏后尽早加载
+& .\data\row-filter\launch_row_filter_early_admin.ps1
+
+# 查看实际模式及日志
+Get-Content .\data\row-filter\row_filter_mode.txt
+Get-Content .\data\row-filter\matchmaking_row_filter.log -Tail 80
 ```
 
-Run with the existing loader:
+优先使用融合工具的过滤器页。提前加载脚本启动 Steam 游戏并等待进程最多 120 秒；加载过晚时，已有 UI/服务器列表缓存可能仍保留旧行。改变规则后按界面提示重新加载或重启；仅编辑文件不代表已运行 DLL 即时采用新值。
+
+## 恢复默认规则
+
+`config_defaults` 提供四份 TXT 种子和 `default_filter_config.json` 说明。恢复操作会**覆盖**四份当前规则，执行前先备份：
 
 ```powershell
-.\load_row_filter_admin.ps1
+& .\data\row-filter\restore_default_configs.ps1
 ```
 
-For Steam group-server hiding tests, prefer early launch/inject. The group
-server list refreshes in the main menu before the visible list is opened, so
-attaching after the game is already sitting in the menu can leave old cached
-rows visible:
+该脚本不重置 `row_filter_mode.txt`，也不清空日志；JSON 种子不是界面“保存配置”的输出文件。应用更新保留已有规则、模式和日志，但用户主动恢复默认会覆盖规则。
 
-```powershell
-.\launch_row_filter_early_admin.ps1
-```
+## 日志、兼容性与分发
 
-Log:
+日志为 `data/row-filter/matchmaking_row_filter.log`。先核对加载是否成功、模式、规则数量、版本和错误，再判断过滤效果。历史硬编码模块偏移属于旧研究记录，不作为当前游戏版本兼容性说明。
 
-```text
-matchmaking_row_filter.log
-```
-
-Mode:
-
-```text
-# row_filter_mode.txt, optional
-neutralize_keyword_then_late_skip
-```
-
-Accepted values:
-
-- `neutralize_keyword_then_late_skip` or no file: default keyword neutralization
-  experiment.
-- `late_update_skip` / `late`: no keyword mutation, only the older late update
-  skip.
-- `early` / `early_consume_skip`: experimental; currently crash-prone.
-- `dispatch_skip_client_name`: skip keyword-matched matchmaking dispatch
-  callbacks and return from the UI server-name path.
-- `dispatch_skip_mark_hidden`: current group-server hiding experiment. It skips
-  keyword-matched matchmaking dispatch callbacks, returns from the UI
-  server-name path, and marks nearby UI state bytes used by the client code.
-
-Keyword config:
-
-```text
-# blocked_keywords.txt
-rpg
-```
-
-Keyword matching is ASCII case-insensitive, so `rpg` also matches `RPG`, `Rpg`,
-and other ASCII case combinations.
-
-Address config:
-
-```text
-# blocked_connectstrings.txt
-110.42.9.24
-61.147.247.31
-```
-
-`blocked_connectstrings.txt` is the permanent manual list. The DLL also reads
-`learned_connectstrings.txt` at inject time. That file is generated by
-`game_details_filter_gui` from `matched_entries.json`: when the GUI sees an A2S
-or GameDetails identity matching the blocked server families, it exports the
-matched endpoint host so Steam group-server rows can be dropped by parsed item
-address.
-
-The DLL also maintains an experimental runtime-derived list:
-
-```text
-auto_derived_connectstrings.txt
-```
-
-When a Steam group-server refresh contains repeated disguised default rows on the
-same host (`Left 4 Dead 2`, official map, high player limit), the host is
-promoted after a small threshold and appended to this file. This is intended to
-learn direct families such as XY/Starry Sky's `61.147.247.31` from the Steam item
-path, without hard-coding it from the GUI's public `110.42.9.24:29xxx` A2S
-identity.
-
-The auto-derived file is a next-launch fast path, not the first line of defense
-for the current refresh. Current-refresh hiding must come from immediate row
-rules such as `disguised_default_large_pool` or keyword/address matches. Runtime
-promotion only updates the file if the derived host set changed; if the same host
-is already present, it logs `steam auto-derived config unchanged` and leaves the
-file alone. File updates run on a short background thread and use a temp file plus
-atomic replace to avoid blocking Steam callback execution.
-
-Default seeds:
-
-```text
-config_defaults\default_filter_config.json
-config_defaults\default_blocked_keywords.txt
-config_defaults\default_blocked_connectstrings.txt
-config_defaults\default_learned_connectstrings.txt
-config_defaults\default_auto_derived_connectstrings.txt
-```
-
-These files record the rules and hosts already confirmed during research,
-including the XY/Starry Sky public identity family `110.42.9.24`, the derived
-direct family `61.147.247.31`, and other previously matched RPG/entry-server
-families. To restore the runtime config files from these seeds:
-
-```powershell
-.\restore_default_configs.ps1
-```
-
-Useful key-line check:
-
-```powershell
-Select-String matchmaking_row_filter.log -Pattern "loaded|auto-derived|keyword|source=|field=|deep=|neutralized|ui_neutralized|armed|mode=|group refresh|table probe|client ui keyword probe|seen connectstring|new blocked|match|entry_seq|early skipped|skipped|error|failed"
-```
+本组件不是 Workshop VPK。遵守服务器与平台规则，并确认本机运行文件可信。升级前备份 data；公开分发不带个人服务器规则、日志和部署记录。

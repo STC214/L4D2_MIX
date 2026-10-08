@@ -1,5 +1,16 @@
 # L4D2 MIX
 
+[GitHub 仓库](https://github.com/STC214/L4D2_MIX) · [优化版完整说明](L4D2_MIX_optimized/README.md)
+
+文档更新：2026-10-08（Asia/Shanghai）。推荐使用优化版；根目录原版保留原始实现，未同步启动优化、组件缓存和首帧闪白修复。
+
+| 实现 | 启动路径（相对仓库根目录） | 构建入口 |
+| --- | --- | --- |
+| 优化版（推荐） | `L4D2_MIX_optimized/dist/L4D2_MIX.exe` | 进入 `L4D2_MIX_optimized` 后运行 `package-portable.ps1` |
+| 根目录原版 | `dist/L4D2_MIX.exe` | 在仓库根目录运行 `package-portable.ps1` |
+
+两版 EXE 文件名相同，请核对实际运行路径。下面的功能与数据说明适用于融合工具；涉及启动优化与 ZIP 的部分仅适用于优化版。
+
 一个统一的 Go + Win32 控制台，将以下三个现有工具放进同一个窗口：
 
 - `Left4Dead2-Autobhop_VPK_W`：窗口选择、偏移配置、自动探测、启动/停止和实时状态。
@@ -8,17 +19,17 @@
 
 ## 使用
 
-运行：
+推荐运行优化版：
 
 ```text
-dist\L4D2_MIX.exe
+L4D2_MIX_optimized\dist\L4D2_MIX.exe
 ```
 
-程序会请求管理员权限。左侧按钮用于切换三个完整功能页。点击最小化后，主窗口会隐藏到系统托盘；单击、双击或右击托盘图标均可恢复。恢复时宿主会重新布局当前标签页，先遮罩并重显当前嵌入窗口，再触发重绘，避免原生子控件在 `组服务器过滤` 等复杂页面留下白块或残影。
+程序会请求管理员权限。左侧按钮用于切换三个完整功能页。最小化隐藏至系统托盘：优化版单击/双击恢复，右击打开托盘菜单；原版单击、双击或右击恢复。恢复时宿主重新布局并重绘当前嵌入窗口，不重启组件或后台任务。
 
 ## 优化版子项目
 
-当前仓库保留母项目原始实现，同时在 `L4D2_MIX_optimized` 中放置了一份完整复制后的优化版。优化版保持同样的功能入口和运行数据布局，并额外整理了 UI 外观、按钮配色、标题栏颜色、发布说明和构建验证流程。继续迭代新界面时优先进入该子项目：
+当前仓库保留母项目原始实现，优化版位于 `L4D2_MIX_optimized`。它保持功能入口和运行数据布局，并维护 UI 外观、启动调度、固定组件缓存、首帧深色绘制、诊断和便携 ZIP。继续迭代优先进入该子项目：
 
 ```powershell
 cd .\L4D2_MIX_optimized
@@ -144,7 +155,21 @@ F:\Project\03_Game_Tools\L4D2_MOD_JOIN\dist\data
 - 导入结果记录在 `data\mod-join\legacy-import-v1.json`。
 - 导入只复制文件，不删除或修改独立版目录。
 
-## 图标
+## 优化版启动、发布与文档导航
+
+- 默认连跳组件先校验/释放并创建进程；其他载荷准备与旧 MOD 状态导入和连跳初始化重叠，默认页初始化完成后再创建其他页面进程。默认页优先可能让非当前页稍晚就绪，不保证所有页面同时变快。
+- 子页面设置 `L4D2MixReady`，宿主检查进程 ID、直接父窗口和该标记；接入并布局后设置 `L4D2MixAttached`。加载和进程退出显示明确状态。
+- 固定组件按构建清单缓存：24 小时内大小/修改时间一致时跳过重复读取；版本、元数据变化、缺失、缓存损坏或过期触发 SHA-256 校验与修复。相同大小和修改时间的变动可能延迟发现，设置 `L4D2_MIX_VERIFY_PAYLOAD=1` 可每次完整校验。已有可编辑规则、模式、日志保留。
+- 宿主采用专用深色容器与显式背景绘制，创建时采用最大化布局；子页先调整尺寸，再显示并同步首次重绘，MOD 窗口类也使用深色背景刷。
+- 设置 `L4D2_MIX_TRACE_STARTUP=1` 后，启动阶段日志追加至 EXE 同级 `data/startup-traces/*.jsonl`；平时不写性能日志。
+- 优化版构建输出 `dist/L4D2_MIX.exe`、`dist/L4D2_MIX-portable.zip` 和 `.zip.sha256`。ZIP 只含 EXE 和 README.txt，不含个人 data。产物不由 Git 跟踪，推送源码不等于发布 Release 附件。
+- 当前发布宿主为 x64，预构建 Loader/DLL 为 x86。宿主与连跳模块要求 Go 1.26；Windows 构建需将 go 和 windres.exe 放入 PATH。
+
+[优化版使用与验证](L4D2_MIX_optimized/README.md) · [优化版 Loader](L4D2_MIX_optimized/payload/runtime/matchmaking_probe_loader/README.md) · [优化版过滤器](L4D2_MIX_optimized/payload/runtime/matchmaking_row_filter_dll/README.md) · [原版 Loader](payload/runtime/matchmaking_probe_loader/README.md) · [原版过滤器](payload/runtime/matchmaking_row_filter_dll/README.md)
+
+首次释放组件缓存不等于操作系统冷启动。验证覆盖被测构建的深色背景像素、缓存、竞态、标签切换、启动中关闭和托盘恢复，不保证任意机器的固定启动时间或每个桌面合成帧。完整 go vet 仍有两处既有 Win32 lParam 指针转换提示；当前静态验证使用 `go vet -unsafeptr=false ./...`，不代表完整 vet 零提示。
+
+## 图标资源
 
 根目录的 `ico.jpg` 为 2048×2048 源图。构建使用 `assets\app.ico`，其中包含 16、20、24、32、40、48、64、128 和 256 像素图层。该图标被写入：
 
@@ -155,11 +180,13 @@ F:\Project\03_Game_Tools\L4D2_MOD_JOIN\dist\data
 
 ## 构建
 
+此处为**根目录原版**构建。推荐优化版的构建及 ZIP 流程见上文链接；运行前确认所在目录。
+
 ```powershell
 .\package-portable.ps1
 ```
 
-脚本会测试并重建连跳、服务器过滤和 MOD 分类合并组件，再刷新过滤器运行目录，生成资源并构建：
+脚本测试并重建三个 Go 界面组件，检查仓库中已有运行文件、生成资源并构建：
 
 ```text
 dist\L4D2_MIX.exe
@@ -167,13 +194,15 @@ dist\L4D2_MIX.exe
 
 过滤器 Loader、DLL、脚本和默认配置已纳入本项目的 `payload\runtime`。构建脚本不会再访问其他项目的绝对路径，因此当前项目可以独立构建。
 
+Loader/DLL 使用预构建文件，其独立源码和编译脚本未包含在本仓库。原版脚本仅生成其 EXE，没有优化版 ZIP、缓存和首帧修复。升级前备份并保留 data；公开分发排除个人路径、规则和部署记录。MOD 的一键还原不回滚应用版本。
+
 构建脚本会检查每个原生命令的退出码。任一组件测试、组件构建、资源编译或宿主构建失败时会立即终止，不会继续使用旧载荷生成看似成功的 EXE。
 
 ## UI 防卡死约束
 
 - 组件释放、进程启动和窗口等待均在 goroutine 中执行。
 - 工作线程只用 `PostMessageW` 把结果交回 UI 线程。
-- 主消息循环不执行 PowerShell、不等待游戏、不扫描日志。
+- 宿主主消息循环不执行 PowerShell、不等待游戏、不扫描日志；过滤器自身仍读取规则和日志尾部，优化版 MOD 的迁移与路径检测在后台初始化。
 - 三个原工具仍各自保留原有后台任务与超时机制。
 - 三个功能组件在创建窗口时直接使用宿主页作为父窗口，不会先显示独立顶层窗口，也不再使用运行后的跨进程 `SetParent`。
 - 页面切换隐藏的是原生子窗口页面；构建脚本附带 30 次三标签循环验证脚本 `scripts\verify-ui-switch.ps1`。
