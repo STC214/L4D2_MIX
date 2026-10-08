@@ -318,6 +318,9 @@ func conflictWindowProc(hwnd uintptr, message uint32, wParam, lParam uintptr) ui
 			closeConflictResolver(false)
 		}
 		return 0
+	case wmDrawItem:
+		drawThemedButton((*drawItemStruct)(unsafe.Pointer(lParam)))
+		return 1
 	case wmCtlColorStatic:
 		procSetTextColor.Call(wParam, 0x00E8E4DF)
 		procSetBkMode.Call(wParam, 1)

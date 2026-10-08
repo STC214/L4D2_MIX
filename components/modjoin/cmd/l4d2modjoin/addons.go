@@ -39,6 +39,9 @@ var legacyManagedOutputs = []string{
 }
 
 func deployAndDisable(manifest buildManifest, outputDir, addonsDir, stateDir string, progress operationProgress) (string, []string, error) {
+	if err := validateBuiltFiles(manifest.Files, true); err != nil {
+		return "", nil, err
+	}
 	if addonsDir == "" {
 		return "", nil, fmt.Errorf("未找到 Left 4 Dead 2 addons 目录")
 	}
@@ -605,12 +608,7 @@ func normalizeDeploymentManifest(manifest *buildManifest, fallbackAddons string)
 		return fmt.Errorf("无法确定部署清单所属的 addons 目录")
 	}
 	manifest.DeployedAddons = cleanPath(manifest.DeployedAddons)
-	for _, file := range manifest.Files {
-		if file.Name == "" || filepath.Base(file.Name) != file.Name {
-			return fmt.Errorf("包含无效部署文件名")
-		}
-	}
-	return nil
+	return validateBuiltFiles(manifest.Files, false)
 }
 
 func registryDeployment(registry deploymentRegistry, addonsDir string) (buildManifest, bool) {
@@ -735,11 +733,12 @@ func detectAddonsDir() string {
 		`C:\Program Files (x86)\Steam\steamapps\common\Left 4 Dead 2\left4dead2\addons`,
 		`C:\Program Files\Steam\steamapps\common\Left 4 Dead 2\left4dead2\addons`,
 	}
-	for drive := 'C'; drive <= 'Z'; drive++ {
+	for _, drive := range startupFixedDrives() {
 		candidates = append(candidates,
-			fmt.Sprintf(`%c:\SteamLibrary\steamapps\common\Left 4 Dead 2\left4dead2\addons`, drive),
-			fmt.Sprintf(`%c:\Program Files (x86)\Steam\steamapps\common\Left 4 Dead 2\left4dead2\addons`, drive))
+			drive+`SteamLibrary\steamapps\common\Left 4 Dead 2\left4dead2\addons`,
+			drive+`Program Files (x86)\Steam\steamapps\common\Left 4 Dead 2\left4dead2\addons`)
 	}
+
 	for _, candidate := range candidates {
 		if info, err := os.Stat(candidate); err == nil && info.IsDir() {
 			return candidate

@@ -898,13 +898,13 @@ func attachChild(index int, hwnd uintptr) {
 		return
 	}
 	app.mu.Lock()
+	if app.children[index].process == nil || !childWindowMatches(hwnd, app.pageHosts[index], uint32(app.children[index].process.Pid)) {
+		app.mu.Unlock()
+		return
+	}
 	if app.closing {
 		app.mu.Unlock()
 		procPostMessageW.Call(hwnd, WM_CLOSE, 0, 0)
-		return
-	}
-	if app.children[index].process == nil {
-		app.mu.Unlock()
 		return
 	}
 	app.children[index].hwnd = hwnd
@@ -985,7 +985,7 @@ func activatePage(index int, width, height int32) {
 	app.children[index].active = true
 	app.mu.Unlock()
 	if index == 2 {
-		procSendMessageW.Call(hwnd, WM_MIX_ACTIVATE, 0, 0)
+		procPostMessageW.Call(hwnd, WM_MIX_ACTIVATE, 0, 0)
 	}
 }
 
@@ -1041,7 +1041,11 @@ func requestClose() {
 	app.mu.Unlock()
 
 	if modHwnd != 0 {
-		canClose, _, _ := procSendMessageW.Call(modHwnd, WM_MIX_CAN_CLOSE, 0, 0)
+		canClose, responded := sendMessageBounded(modHwnd, WM_MIX_CAN_CLOSE, 1000)
+		if !responded {
+			setStatus("MOD 组件暂未响应关闭检查，请稍后重试；当前任务保持运行。")
+			return
+		}
 		if canClose == 0 {
 			visible, _, _ := procIsWindowVisible.Call(app.hwnd)
 			if visible == 0 {
@@ -1345,7 +1349,7 @@ func refreshAfterRestore() {
 	app.mu.Unlock()
 	if childHwnd != 0 {
 		procRedrawWindow.Call(childHwnd, 0, 0, RDW_INVALIDATE|RDW_ERASE|RDW_ALLCHILDREN|RDW_UPDATENOW)
-		procSendMessageW.Call(childHwnd, WM_MIX_ACTIVATE, 0, 0)
+		procPostMessageW.Call(childHwnd, WM_MIX_ACTIVATE, 0, 0)
 		procUpdateWindow.Call(childHwnd)
 	}
 }

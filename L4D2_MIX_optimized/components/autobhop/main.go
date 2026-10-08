@@ -716,20 +716,29 @@ func selectedTarget() (targetWindow, bool) {
 	return targetWindow{}, false
 }
 
-func enumerateGameWindows() []targetWindow {
-	var out []targetWindow
-	cb := syscall.NewCallback(func(hwnd uintptr, lParam uintptr) uintptr {
-		if isWindowVisible(hwnd) && getWindowTextLength(hwnd) > 0 {
-			title := getWindowTitle(hwnd)
-			if strings.Contains(strings.ToLower(title), "left 4 dead 2") {
-				var pid uint32
-				procGetWindowThreadProcessId.Call(hwnd, uintptr(unsafe.Pointer(&pid)))
-				out = append(out, targetWindow{hwnd: hwnd, pid: pid, title: title})
-			}
+var gameWindowEnumMu sync.Mutex
+var gameWindowEnumResults []targetWindow
+var gameWindowEnumCallback = syscall.NewCallback(func(hwnd uintptr, _ uintptr) uintptr {
+	if isWindowVisible(hwnd) && getWindowTextLength(hwnd) > 0 {
+		title := getWindowTitle(hwnd)
+		if strings.Contains(strings.ToLower(title), "left 4 dead 2") {
+			var pid uint32
+			procGetWindowThreadProcessId.Call(hwnd, uintptr(unsafe.Pointer(&pid)))
+			gameWindowEnumResults = append(gameWindowEnumResults, targetWindow{hwnd: hwnd, pid: pid, title: title})
 		}
-		return 1
-	})
-	procEnumWindows.Call(cb, 0)
+	}
+	return 1
+})
+
+func enumerateGameWindows() []targetWindow {
+	// Go callbacks remain allocated for process lifetime. Reuse one even after
+	// thousands of refreshes, with serialized scratch state for the native call.
+	gameWindowEnumMu.Lock()
+	defer gameWindowEnumMu.Unlock()
+	gameWindowEnumResults = nil
+	procEnumWindows.Call(gameWindowEnumCallback, 0)
+	out := gameWindowEnumResults
+	gameWindowEnumResults = nil
 	return out
 }
 
@@ -766,10 +775,14 @@ func startWorker() {
 func stopWorker(status int) {
 	state.mu.Lock()
 	if state.running && state.stop != nil {
-		close(state.stop)
+		select {
+		case <-state.stop:
+		default:
+			close(state.stop)
+		}
 	}
-	state.running = false
-	state.stop = nil
+	// Keep ownership until the worker releases any held key and exits. Starting
+	// a replacement earlier lets the old worker reset the new worker's state.
 	state.mu.Unlock()
 	setStatus(status)
 }
@@ -1108,10 +1121,10 @@ func waitForClientBaseTimeout(pid uint32, timeout time.Duration) uintptr {
 }
 
 func runBhop(cfg settings, stop <-chan struct{}) {
+	defer markStopped(stop)
 	hProcess, _, _ := procOpenProcess.Call(PROCESS_VM_READ|PROCESS_QUERY_LIMITED_INFO, 0, uintptr(cfg.pid))
 	if hProcess == 0 {
 		postStatus(statusErrorOpenProcess)
-		markStopped()
 		return
 	}
 	defer procCloseHandle.Call(hProcess)
@@ -1119,12 +1132,10 @@ func runBhop(cfg settings, stop <-chan struct{}) {
 	clientBase, stopped := waitForClientBase(cfg.pid, stop)
 	if stopped {
 		postStatus(statusStopped)
-		markStopped()
 		return
 	}
 	if clientBase == 0 {
 		postStatus(statusErrorClientDLL)
-		markStopped()
 		return
 	}
 	postStatus(statusRunning)
@@ -1146,7 +1157,6 @@ func runBhop(cfg settings, stop <-chan struct{}) {
 					postKey(cfg.hwnd, WM_KEYUP)
 				}
 				postStatus(statusGameClosed)
-				markStopped()
 				return
 			}
 			key, _, _ := procGetAsyncKeyState.Call(VK_SPACE)
@@ -1215,7 +1225,11 @@ func waitForClientBase(pid uint32, stop <-chan struct{}) (uintptr, bool) {
 		if base != 0 {
 			return base, false
 		}
-		time.Sleep(750 * time.Millisecond)
+		select {
+		case <-stop:
+			return 0, true
+		case <-time.After(750 * time.Millisecond):
+		}
 	}
 }
 
@@ -1263,10 +1277,12 @@ func postKey(hwnd uintptr, message uint32) {
 	procSendMessageW.Call(hwnd, uintptr(message), VK_SPACE, SPACE_KEY_LPARAM)
 }
 
-func markStopped() {
+func markStopped(stop <-chan struct{}) {
 	state.mu.Lock()
-	state.running = false
-	state.stop = nil
+	if state.stop == stop {
+		state.running = false
+		state.stop = nil
+	}
 	state.mu.Unlock()
 }
 

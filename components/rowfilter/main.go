@@ -1,13 +1,12 @@
 package main
 
 import (
-	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"row_filter_manager_gui/internal/textfile"
 	"runtime"
 	"strconv"
 	"strings"
@@ -35,7 +34,13 @@ const (
 	ES_READONLY         = 0x0800
 	BS_PUSHBUTTON       = 0x00000000
 	BS_GROUPBOX         = 0x00000007
+	BS_OWNERDRAW        = 0x0000000B
 	SS_LEFT             = 0x00000000
+	DT_CENTER           = 0x0001
+	DT_VCENTER          = 0x0004
+	DT_SINGLELINE       = 0x0020
+	ODS_SELECTED        = 0x0001
+	ODS_DISABLED        = 0x0004
 
 	SW_HIDE       = 0
 	SW_SHOW       = 5
@@ -47,6 +52,7 @@ const (
 	WM_SIZE           = 0x0005
 	WM_ERASEBKGND     = 0x0014
 	WM_COMMAND        = 0x0111
+	WM_DRAWITEM       = 0x002B
 	WM_SETICON        = 0x0080
 	WM_SETFONT        = 0x0030
 	WM_KEYDOWN        = 0x0100
@@ -79,13 +85,11 @@ const (
 	ID_FOLDER  = 1007
 	ID_ADD_IP  = 1008
 	ID_ADD_KEY = 1009
+	ID_CLEAN   = 1010
 	ID_TIMER   = 2001
 
 	WM_APP_EVENT = WM_APP + 1
 	WM_TRAY_ICON = WM_APP + 2
-
-	MOVEFILE_REPLACE_EXISTING = 0x00000001
-	MOVEFILE_WRITE_THROUGH    = 0x00000008
 
 	NIM_ADD    = 0x00000000
 	NIM_DELETE = 0x00000002
@@ -102,6 +106,7 @@ var (
 	kernel32 = syscall.NewLazyDLL("kernel32.dll")
 	gdi32    = syscall.NewLazyDLL("gdi32.dll")
 	shell32  = syscall.NewLazyDLL("shell32.dll")
+	dwmapi   = syscall.NewLazyDLL("dwmapi.dll")
 
 	procDefWindowProc    = user32.NewProc("DefWindowProcW")
 	procDispatchMessage  = user32.NewProc("DispatchMessageW")
@@ -130,21 +135,30 @@ var (
 	procEnableWindow     = user32.NewProc("EnableWindow")
 	procMessageBox       = user32.NewProc("MessageBoxW")
 	procFillRect         = user32.NewProc("FillRect")
+	procDrawText         = user32.NewProc("DrawTextW")
 	procIsUserAnAdmin    = shell32.NewProc("IsUserAnAdmin")
 	procShellNotifyIcon  = shell32.NewProc("Shell_NotifyIconW")
 	procShellExecute     = shell32.NewProc("ShellExecuteW")
 	procGetModuleHandle  = kernel32.NewProc("GetModuleHandleW")
-	procMoveFileEx       = kernel32.NewProc("MoveFileExW")
 	procGetStockObject   = gdi32.NewProc("GetStockObject")
 	procCreateSolidBrush = gdi32.NewProc("CreateSolidBrush")
 	procDeleteObject     = gdi32.NewProc("DeleteObject")
 	procSetTextColor     = gdi32.NewProc("SetTextColor")
 	procSetBkColor       = gdi32.NewProc("SetBkColor")
+	procSetBkMode        = gdi32.NewProc("SetBkMode")
+	procSelectObject     = gdi32.NewProc("SelectObject")
 	procCreateFont       = gdi32.NewProc("CreateFontW")
+	procDwmSetAttr       = dwmapi.NewProc("DwmSetWindowAttribute")
 )
 
 type point struct{ X, Y int32 }
 type rect struct{ Left, Top, Right, Bottom int32 }
+type drawItemStruct struct {
+	CtlType, CtlID, ItemID, ItemAction, ItemState uint32
+	HwndItem, HDC                                 uintptr
+	RcItem                                        rect
+	ItemData                                      uintptr
+}
 
 type msg struct {
 	HWnd    uintptr
@@ -232,6 +246,7 @@ type appState struct {
 	restoreBtn uintptr
 	saveBtn    uintptr
 	startBtn   uintptr
+	cleanBtn   uintptr
 	injectBtn  uintptr
 	refreshBtn uintptr
 	openLogBtn uintptr
@@ -254,6 +269,7 @@ var oldLogEditProc uintptr
 var logEditCallback uintptr
 
 func main() {
+	startupMark("main")
 	runtime.LockOSThread()
 	if !isAdmin() {
 		relaunchAsAdmin()
@@ -334,11 +350,13 @@ func runUI() {
 		parent, 0, hinst, 0,
 	)
 	app.hwnd = hwnd
+	startupReady(hwnd)
 	if appIcon != 0 {
 		procSendMessage.Call(hwnd, WM_SETICON, ICON_BIG, appIcon)
 		procSendMessage.Call(hwnd, WM_SETICON, ICON_SMALL, appIcon)
 	}
 	if embedParent == 0 {
+		enableDarkTitleBar(hwnd)
 		procShowWindow.Call(hwnd, SW_SHOW)
 		procUpdateWindow.Call(hwnd)
 	}
@@ -366,14 +384,23 @@ func embeddedParent() uintptr {
 	return uintptr(parent)
 }
 
+func enableDarkTitleBar(hwnd uintptr) {
+	enabled := int32(1)
+	if result, _, _ := procDwmSetAttr.Call(hwnd, 20, uintptr(unsafe.Pointer(&enabled)), unsafe.Sizeof(enabled)); int32(result) != 0 {
+		procDwmSetAttr.Call(hwnd, 19, uintptr(unsafe.Pointer(&enabled)), unsafe.Sizeof(enabled))
+	}
+}
+
 func wndProc(hwnd uintptr, msg uint32, wparam, lparam uintptr) uintptr {
 	switch msg {
 	case WM_CREATE:
 		app.hwnd = hwnd
 		createControls(hwnd)
 		procSetTimer.Call(hwnd, ID_TIMER, 350, 0)
+		startupMark("rules_load_begin")
 		loadConfigsToUI()
 		refreshLogTail()
+		startupMark("rules_load_end")
 		return 0
 	case WM_SIZE:
 		if wparam == SIZE_MINIMIZED {
@@ -391,9 +418,16 @@ func wndProc(hwnd uintptr, msg uint32, wparam, lparam uintptr) uintptr {
 			return 0
 		}
 		return 0
+	case 0x000F:
+		ret, _, _ := procDefWindowProc.Call(hwnd, uintptr(msg), wparam, lparam)
+		startupFirstPaint()
+		return ret
 	case WM_COMMAND:
 		handleCommand(int(wparam & 0xffff))
 		return 0
+	case WM_DRAWITEM:
+		drawButton((*drawItemStruct)(unsafe.Pointer(lparam)))
+		return 1
 	case WM_KEYDOWN:
 		if wparam == VK_A && isControlDown() && getFocus() == app.logEdit {
 			procSendMessage.Call(app.logEdit, EM_SETSEL, 0, ^uintptr(0))
@@ -420,6 +454,7 @@ func wndProc(hwnd uintptr, msg uint32, wparam, lparam uintptr) uintptr {
 }
 
 func createControls(hwnd uintptr) {
+	startupMark("controls_begin")
 	app.font = createFont("Microsoft YaHei UI", 18, 400)
 	app.title = label(hwnd, "L4D2 组服务器过滤器", 24, 18, 360, 28)
 	app.subtitle = label(hwnd, "编辑规则、启动游戏并注入组服务器过滤核心。", 24, 48, 760, 24)
@@ -451,10 +486,11 @@ func createControls(hwnd uintptr) {
 	app.restoreBtn = button(hwnd, "恢复默认", 42, 626, 112, 32, ID_RESTORE)
 	app.saveBtn = button(hwnd, "保存配置", 166, 626, 112, 32, ID_SAVE)
 	app.startBtn = button(hwnd, "启动并注入", 308, 626, 124, 32, ID_START)
-	app.injectBtn = button(hwnd, "注入运行中游戏", 444, 626, 132, 32, ID_INJECT)
-	app.refreshBtn = button(hwnd, "刷新日志", 596, 626, 112, 32, ID_REFRESH)
-	app.openLogBtn = button(hwnd, "打开日志", 720, 626, 112, 32, ID_OPENLOG)
-	app.folderBtn = button(hwnd, "打开组件目录", 844, 626, 112, 32, ID_FOLDER)
+	app.cleanBtn = button(hwnd, "纯净启动", 438, 626, 112, 32, ID_CLEAN)
+	app.injectBtn = button(hwnd, "注入运行中游戏", 556, 626, 132, 32, ID_INJECT)
+	app.refreshBtn = button(hwnd, "刷新日志", 694, 626, 112, 32, ID_REFRESH)
+	app.openLogBtn = button(hwnd, "打开日志", 812, 626, 112, 32, ID_OPENLOG)
+	app.folderBtn = button(hwnd, "打开组件目录", 930, 626, 112, 32, ID_FOLDER)
 }
 
 func handleCommand(id int) {
@@ -473,6 +509,15 @@ func handleCommand(id int) {
 		runBackground("启动并注入", false, true, func(ctx context.Context) error {
 			return runPowerShell(ctx, filepath.Join(dllDir(), "launch_row_filter_early_admin.ps1"))
 		})
+	case ID_CLEAN:
+		app.mu.Lock()
+		busy := app.busy
+		app.mu.Unlock()
+		if busy {
+			queueLog("已有任务正在运行，纯净启动已跳过。")
+			return
+		}
+		launchCleanGame()
 	case ID_INJECT:
 		runBackground("注入运行中游戏", false, true, func(ctx context.Context) error {
 			return runPowerShell(ctx, filepath.Join(dllDir(), "load_row_filter_admin.ps1"))
@@ -484,6 +529,20 @@ func handleCommand(id int) {
 	case ID_FOLDER:
 		openPath(dllDir())
 	}
+}
+
+func launchCleanGame() {
+	ret, _, _ := procShellExecute.Call(
+		app.hwnd,
+		uintptr(unsafe.Pointer(utf16Ptr("open"))),
+		uintptr(unsafe.Pointer(utf16Ptr("steam://run/550"))),
+		0, 0, SW_SHOWNORMAL,
+	)
+	if ret <= 32 {
+		queueLog(fmt.Sprintf("纯净启动失败：ShellExecuteW=%d", ret))
+		return
+	}
+	queueLog("已请求 Steam 纯净启动游戏。")
 }
 
 func loadConfigsToUI() {
@@ -670,7 +729,7 @@ func drainEventsToUI() {
 }
 
 func setBusy(busy bool) {
-	for _, h := range []uintptr{app.restoreBtn, app.saveBtn, app.startBtn, app.injectBtn} {
+	for _, h := range []uintptr{app.restoreBtn, app.saveBtn, app.startBtn, app.cleanBtn, app.injectBtn} {
 		enable(h, !busy)
 	}
 }
@@ -684,120 +743,35 @@ func readListFile(path string) string {
 }
 
 func normalizeEditableList(text string) string {
-	out := splitRuleLines(text)
-	if len(out) == 0 {
-		return ""
-	}
-	return strings.Join(out, "\r\n") + "\r\n"
+	return textfile.NormalizeEditableList(text)
 }
 
 func splitRuleLines(text string) []string {
-	lines := strings.Split(normalizeNewlines(text), "\n")
-	var out []string
-	seen := map[string]bool{}
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		key := strings.ToLower(line)
-		if seen[key] {
-			continue
-		}
-		seen[key] = true
-		out = append(out, line)
-	}
-	return out
+	return textfile.SplitRuleLines(text)
 }
 
 func countRules(text string) int {
-	n := 0
-	for _, line := range strings.Split(normalizeNewlines(text), "\n") {
-		line = strings.TrimSpace(line)
-		if line != "" && !strings.HasPrefix(line, "#") {
-			n++
-		}
-	}
-	return n
+	return textfile.CountRules(text)
 }
 
 func readTail(path string, maxBytes int64) (string, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return "", err
-	}
-	defer f.Close()
-	info, err := f.Stat()
-	if err != nil {
-		return "", err
-	}
-	start := int64(0)
-	if info.Size() > maxBytes {
-		start = info.Size() - maxBytes
-	}
-	if _, err := f.Seek(start, 0); err != nil {
-		return "", err
-	}
-	buf := bytes.Buffer{}
-	if _, err := buf.ReadFrom(f); err != nil {
-		return "", err
-	}
-	return normalizeNewlines(buf.String()), nil
+	return textfile.ReadTail(path, maxBytes)
 }
 
 func writeTextAtomic(path, text string) error {
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return err
-	}
-	tmp, err := os.CreateTemp(dir, filepath.Base(path)+".tmp.")
-	if err != nil {
-		return err
-	}
-	tmpName := tmp.Name()
-	cleanup := true
-	defer func() {
-		if cleanup {
-			_ = os.Remove(tmpName)
-		}
-	}()
-	if _, err := tmp.WriteString(text); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	oldName := utf16Ptr(tmpName)
-	newName := utf16Ptr(path)
-	ret, _, callErr := procMoveFileEx.Call(uintptr(unsafe.Pointer(oldName)), uintptr(unsafe.Pointer(newName)), MOVEFILE_REPLACE_EXISTING|MOVEFILE_WRITE_THROUGH)
-	if ret == 0 {
-		if callErr != syscall.Errno(0) {
-			return callErr
-		}
-		return errors.New("MoveFileExW failed")
-	}
-	cleanup = false
-	return nil
+	return textfile.WriteTextAtomic(path, text)
 }
 
 func normalizeNewlines(text string) string {
-	text = strings.ReplaceAll(text, "\r\n", "\n")
-	text = strings.ReplaceAll(text, "\r", "\n")
-	return text
+	return textfile.NormalizeNewlines(text)
 }
 
 func newestLinesFirst(text string) string {
-	lines := strings.Split(strings.TrimRight(normalizeNewlines(text), "\n"), "\n")
-	return strings.Join(reverseStrings(lines), "\r\n")
+	return textfile.NewestLinesFirst(text)
 }
 
 func reverseStrings(in []string) []string {
-	out := make([]string, 0, len(in))
-	for i := len(in) - 1; i >= 0; i-- {
-		out = append(out, in[i])
-	}
-	return out
+	return textfile.ReverseStrings(in)
 }
 
 func dllDir() string {
@@ -864,7 +838,66 @@ func group(hwnd uintptr, text string, x, y, w, h int32) uintptr {
 }
 
 func button(hwnd uintptr, text string, x, y, w, h int32, id int) uintptr {
-	return createChild(0, "BUTTON", text, BS_PUSHBUTTON|WS_TABSTOP, x, y, w, h, hwnd, uintptr(id))
+	return createChild(0, "BUTTON", text, BS_OWNERDRAW|WS_TABSTOP, x, y, w, h, hwnd, uintptr(id))
+}
+
+func drawButton(item *drawItemStruct) {
+	if item == nil {
+		return
+	}
+	bg, accent, text := buttonStyle(int(item.CtlID))
+	if item.ItemState&ODS_SELECTED != 0 {
+		bg = rgb(43, 55, 72)
+	}
+	disabled := item.ItemState&ODS_DISABLED != 0
+	if disabled {
+		bg = rgb(30, 35, 43)
+		accent = rgb(76, 86, 100)
+	}
+	brush := createBrush(bg)
+	procFillRect.Call(item.HDC, uintptr(unsafe.Pointer(&item.RcItem)), brush)
+	procDeleteObject.Call(brush)
+	strip := item.RcItem
+	strip.Right = strip.Left + 4
+	stripBrush := createBrush(accent)
+	procFillRect.Call(item.HDC, uintptr(unsafe.Pointer(&strip)), stripBrush)
+	procDeleteObject.Call(stripBrush)
+	procSetBkMode.Call(item.HDC, 1)
+	textColor := rgb(242, 247, 252)
+	if disabled {
+		textColor = rgb(132, 142, 156)
+	}
+	procSetTextColor.Call(item.HDC, uintptr(textColor))
+	procSelectObject.Call(item.HDC, app.font)
+	p := utf16Ptr(text)
+	r := item.RcItem
+	r.Left += 8
+	procDrawText.Call(item.HDC, uintptr(unsafe.Pointer(p)), ^uintptr(0), uintptr(unsafe.Pointer(&r)), DT_CENTER|DT_VCENTER|DT_SINGLELINE)
+}
+
+func buttonStyle(id int) (uint32, uint32, string) {
+	switch id {
+	case ID_RESTORE:
+		return rgb(52, 45, 70), rgb(187, 146, 255), "恢复默认"
+	case ID_SAVE:
+		return rgb(31, 68, 58), rgb(112, 216, 146), "保存配置"
+	case ID_START:
+		return rgb(30, 72, 56), rgb(111, 222, 145), "启动并注入"
+	case ID_CLEAN:
+		return rgb(31, 68, 58), rgb(112, 216, 146), "纯净启动"
+	case ID_INJECT:
+		return rgb(31, 59, 78), rgb(76, 196, 236), "注入运行中游戏"
+	case ID_REFRESH:
+		return rgb(34, 54, 78), rgb(95, 172, 255), "刷新日志"
+	case ID_OPENLOG:
+		return rgb(50, 50, 62), rgb(180, 190, 208), "打开日志"
+	case ID_FOLDER:
+		return rgb(50, 50, 62), rgb(180, 190, 208), "打开组件目录"
+	case ID_ADD_IP, ID_ADD_KEY:
+		return rgb(38, 62, 67), rgb(87, 205, 212), "置顶添加"
+	default:
+		return rgb(36, 48, 64), rgb(76, 196, 236), ""
+	}
 }
 
 func edit(hwnd uintptr, text string, x, y, w, h int32, readonly bool) uintptr {
@@ -925,7 +958,8 @@ func createChild(exStyle uint32, class, text string, style uint32, x, y, w, h in
 func layout(hwnd uintptr) {
 	var r rect
 	procGetClientRect.Call(hwnd, uintptr(unsafe.Pointer(&r)))
-	width := r.Right - r.Left
+	clientWidth := r.Right - r.Left
+	width := clientWidth
 	height := r.Bottom - r.Top
 	if width < 980 {
 		width = 980
@@ -958,15 +992,23 @@ func layout(hwnd uintptr) {
 	move(app.logEdit, rightX+22, top+270, rightW-44, mainH-288)
 	buttonY := height - 58
 	x := int32(42)
-	for _, item := range []struct {
+	buttons := []struct {
 		h uintptr
 		w int32
 	}{
-		{app.restoreBtn, 104}, {app.saveBtn, 104}, {app.startBtn, 116}, {app.injectBtn, 140},
+		{app.restoreBtn, 96}, {app.saveBtn, 96}, {app.startBtn, 112}, {app.cleanBtn, 96}, {app.injectBtn, 132},
 		{app.refreshBtn, 104}, {app.openLogBtn, 104}, {app.folderBtn, 128},
-	} {
-		move(item.h, x, buttonY, item.w, 32)
-		x += item.w + 14
+	}
+	const baseButtonWidth int32 = 868
+	const buttonGap int32 = 10
+	buttonSpace := clientWidth - x - 24 - buttonGap*int32(len(buttons)-1)
+	if buttonSpace < 600 {
+		buttonSpace = 600
+	}
+	for _, item := range buttons {
+		buttonWidth := item.w * buttonSpace / baseButtonWidth
+		move(item.h, x, buttonY, buttonWidth, 32)
+		x += buttonWidth + buttonGap
 	}
 }
 

@@ -2,7 +2,7 @@
 
 [仓库首页](../README.md) · [Loader 说明](payload/runtime/matchmaking_probe_loader/README.md) · [过滤器说明](payload/runtime/matchmaking_row_filter_dll/README.md)
 
-文档更新：2026-10-08（Asia/Shanghai）。命令默认在 `L4D2_MIX_optimized` 目录执行。根目录原版不包含本页的启动优化、缓存和首帧修复。
+文档更新：2026-10-08（Asia/Shanghai）。命令默认在 `L4D2_MIX_optimized` 目录执行。根目录已同步本页的优化与后续修复，并作为推荐开发入口；本目录保留同步的软件副本。
 
 一个统一的 Go + Win32 控制台，将以下三个现有工具放进同一个窗口：
 
@@ -248,7 +248,7 @@ go test -run TestDarkPanelPaintsDarkInsteadOfSystemWhite -v .
 Get-FileHash .\dist\L4D2_MIX-portable.zip -Algorithm SHA256
 ```
 
-完整 `go vet` 仍报告两处既有 Win32 回调 lParam 转原生指针提示。上面的静态检查明确排除该项，不代表完整 vet 零提示；竞态检测需要支持的平台与 C 工具链。
+完整 `go vet` 在四模块合计报告 6 处既有 Win32 回调 lParam 转原生指针提示（宿主 2、连跳 1、过滤器 1、MOD 2）。上面的静态检查明确排除该项，不代表完整 vet 零提示；竞态检测需要支持的平台与 C 工具链。
 
 生命周期脚本使用独立 FixtureRoot，验证六种启动中关闭时机、遗留子进程、30 次标签切换、托盘恢复，并有意终止自己的过滤器测试进程。它会启动管理员窗口，旧 MOD 状态仍可能按程序规则复制到测试目录。不要把 FixtureRoot 指向正在使用的 data 或缓存。`-VerifyUI` 仅验证标签切换，不替代完整生命周期脚本。
 
@@ -257,3 +257,17 @@ Get-FileHash .\dist\L4D2_MIX-portable.zip -Algorithm SHA256
 首次释放组件缓存不等于系统冷启动。当前验证没有采样每个桌面合成帧；若仍观察到闪白，先确认运行优化版新 EXE，再记录白色区域（整窗、内容区、标题栏）、Windows 版本、录屏和启动日志。不要把完整个人 data 随公开反馈上传。
 
 升级回退应用时使用保留的旧 EXE 或源码版本。MOD 页的“一键还原”只还原游戏部署，不回滚应用程序版本。
+
+## 全量后台审查与验证（2026-10-08）
+
+```powershell
+.\scripts\verify-background.ps1 -Build -Rounds 2
+```
+
+根目录执行时覆盖根目录与优化副本的四个 Go 模块，检查软件副本一致性、普通测试、重复竞态测试、完整 vet 已审查 ABI 提示、其他静态分析、gofmt，以及 ZIP 条目与 SHA-256。命令、工作目录、原始 stdout/stderr、退出码及产物哈希记录在 `.tmp/background-verification.json`。在副本执行时仅检查副本。失败立即终止并写出失败记录。
+
+默认不启动应用、游戏、注入脚本或可见 UI 验证；原生窗口测试只创建不可见 HWND 和离屏位图。不要传 `package-portable.ps1 -VerifyUI`，也不要调用其他 UI/启动测量脚本来进行纯后台验证。真实首帧合成效果和游戏集成需要另行实机验证。
+
+本轮修复包括：关闭检查采用有界跨进程消息（超时保持任务运行）、激活通知异步投递、接入前重新核对 HWND/PID/父窗口/Ready、连跳工作线程退出后再释放所有权、重复枚举复用原生回调、日志尾读按快照长度限流、VPK 读取先校验范围、合并第二遍读取核对长度/CRC，以及所有计划路径预检以防输出越界或覆盖输入。构建脚本恢复调用方 GOCACHE/GOTMPDIR，并禁用测试缓存。
+
+“后台审查无新增可修复问题”不等于对所有机器、输入和桌面帧的绝对无缺陷保证；Loader/DLL 为预构建组件，本仓库没有它们的源码。

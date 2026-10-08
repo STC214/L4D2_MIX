@@ -28,6 +28,7 @@ const (
 	wmEraseBkgnd     = 0x0014
 	wmClose          = 0x0010
 	wmCommand        = 0x0111
+	wmDrawItem       = 0x002B
 	wmSetFont        = 0x0030
 	wmSetIcon        = 0x0080
 	wmSetRedraw      = 0x000B
@@ -46,6 +47,7 @@ const (
 	wsClipSiblings   = 0x04000000
 	esAutoHScroll    = 0x0080
 	bsPushButton     = 0
+	bsOwnerDraw      = 0x0000000B
 	lbsNoIntegral    = 0x0100
 	lbAddString      = 0x0180
 	lbInsertString   = 0x0181
@@ -70,6 +72,11 @@ const (
 	idWeaponCustom   = 1032
 	enChange         = 0x0300
 	enKillFocus      = 0x0200
+	odsSelected      = 0x0001
+	odsDisabled      = 0x0004
+	dtCenter         = 0x0001
+	dtVCenter        = 0x0004
+	dtSingleLine     = 0x0020
 )
 
 var (
@@ -168,6 +175,12 @@ type wndClassEx struct {
 	IconSm      uintptr
 }
 type rect struct{ Left, Top, Right, Bottom int32 }
+type drawItemStruct struct {
+	CtlType, CtlID, ItemID, ItemAction, ItemState uint32
+	HwndItem, HDC                                 uintptr
+	RcItem                                        rect
+	ItemData                                      uintptr
+}
 type paintStruct struct {
 	Hdc       uintptr
 	Erase     int32
@@ -193,6 +206,7 @@ type appEvent struct {
 }
 
 type uiState struct {
+	preserveInvalidSettings                     bool
 	hwnd, source, output, addons, log, progress uintptr
 	weaponVolume, weaponCustom                  uintptr
 	scan, merge, deploy, restore                uintptr
@@ -212,6 +226,7 @@ var (
 func utf16(value string) *uint16 { return syscall.StringToUTF16Ptr(value) }
 
 func main() {
+	startupMark("main")
 	runtime.LockOSThread()
 	embedParent := embeddedParent()
 	procCoInitializeEx.Call(0, 2)
@@ -223,11 +238,12 @@ func main() {
 	iconLarge, _, _ := procLoadImage.Call(instance, 2, 1, 32, 32, 0)
 	iconSmall, _, _ := procLoadImage.Call(instance, 2, 1, 16, 16, 0)
 	registerConflictClass(instance, iconLarge, iconSmall)
+	ui.bgBrush, _, _ = procCreateBrush.Call(0x00241E1B)
 	className := utf16("L4D2ModJoinWindow")
 	wc := wndClassEx{
 		Size: uint32(unsafe.Sizeof(wndClassEx{})), WndProc: syscall.NewCallback(windowProc),
 		Instance: instance, Icon: iconLarge, IconSm: iconSmall,
-		Background: colorWindow + 1, ClassName: className,
+		Background: ui.bgBrush, ClassName: className,
 	}
 	procRegisterClass.Call(uintptr(unsafe.Pointer(&wc)))
 	windowStyle := uintptr(wsOverlapped | wsClipChildren)
@@ -324,11 +340,13 @@ func windowProc(hwnd uintptr, message uint32, wParam, lParam uintptr) uintptr {
 			ui.scanResult = nil
 		}
 		if isDirectoryEdit(id) && code == enKillFocus {
+			ui.preserveInvalidSettings = false
 			if err := saveCurrentDirectorySettings(); err != nil {
 				logLine("保存目录设置失败：" + err.Error())
 			}
 		}
 		if (id == idWeaponVolume && code == cbnSelChange) || (id == idWeaponCustom && code == enKillFocus) {
+			ui.preserveInvalidSettings = false
 			if err := saveCurrentDirectorySettings(); err != nil {
 				logLine("保存音量设置失败：" + err.Error())
 			}
@@ -337,6 +355,9 @@ func windowProc(hwnd uintptr, message uint32, wParam, lParam uintptr) uintptr {
 			handleCommand(id)
 		}
 		return 0
+	case wmDrawItem:
+		drawThemedButton((*drawItemStruct)(unsafe.Pointer(lParam)))
+		return 1
 	case wmAppEvent:
 		handleEvent(uint64(wParam))
 		return 0
@@ -357,18 +378,24 @@ func windowProc(hwnd uintptr, message uint32, wParam, lParam uintptr) uintptr {
 		procSetBkColor.Call(wParam, 0x00352E2A)
 		return ui.fieldBrush
 	case wmPaint:
+		defer startupFirstPaint()
 		paintWindow(hwnd)
 		return 0
 	case wmEraseBkgnd:
-		// WM_PAINT draws the complete background through a memory DC.
+		// Seed a dark backing surface even before the first double-buffered paint.
+		var client rect
+		procGetClientRect.Call(hwnd, uintptr(unsafe.Pointer(&client)))
+		procFillRect.Call(wParam, uintptr(unsafe.Pointer(&client)), ui.bgBrush)
 		return 1
 	case wmClose:
 		if ui.busy {
 			logLine("任务仍在运行，请等待完成后关闭。")
 			return 0
 		}
-		if err := saveCurrentDirectorySettings(); err != nil {
-			logLine("保存目录设置失败：" + err.Error())
+		if !ui.preserveInvalidSettings {
+			if err := saveCurrentDirectorySettings(); err != nil {
+				logLine("保存目录设置失败：" + err.Error())
+			}
 		}
 	case wmDestroy:
 		if ui.font != 0 {
@@ -391,7 +418,7 @@ func windowProc(hwnd uintptr, message uint32, wParam, lParam uintptr) uintptr {
 }
 
 func createUI(hwnd uintptr) {
-	ui.bgBrush, _, _ = procCreateBrush.Call(0x00241E1B)
+	startupMark("controls_begin")
 	ui.fieldBrush, _, _ = procCreateBrush.Call(0x00352E2A)
 	cwd, _ := os.Getwd()
 	base := cwd
@@ -411,29 +438,10 @@ func createUI(hwnd uintptr) {
 	} else {
 		ui.stateDir = filepath.Join(stateRoot, stateDirectoryName)
 	}
-	stateFilesMigrated, stateFilesMigrationErr := migrateRootStateFiles(stateRoot, ui.stateDir)
-	deploymentMigrated, deploymentMigrationErr := migrateDeploymentRegistry(ui.stateDir)
-	addons := detectAddonsDir()
 	source := filepath.Join(base, "workshop")
-	if addons != "" {
-		subscriptions := filepath.Join(addons, "workshop")
-		if info, err := os.Stat(subscriptions); err == nil && info.IsDir() {
-			source = subscriptions
-		}
-	}
 	output := filepath.Join(base, "merged")
-	settings, settingsErr := loadAppSettings(ui.stateDir)
-	if settingsErr == nil {
-		if settings.Source != "" {
-			source = settings.Source
-		}
-		if settings.Output != "" {
-			output = settings.Output
-		}
-		if settings.Addons != "" {
-			addons = settings.Addons
-		}
-	}
+	addons := ""
+	settings := appSettings{Version: 1, WeaponSoundVolumePercent: 100}
 	ui.font, _, _ = procCreateFont.Call(19, 0, 0, 0, 400, 0, 0, 0, 134, 0, 0, 5, 0, uintptr(unsafe.Pointer(utf16("Segoe UI"))))
 	ui.titleFont, _, _ = procCreateFont.Call(34, 0, 0, 0, 600, 0, 0, 0, 134, 0, 0, 5, 0, uintptr(unsafe.Pointer(utf16("Segoe UI"))))
 
@@ -459,31 +467,18 @@ func createUI(hwnd uintptr) {
 	ui.progress = makeControl(hwnd, "msctls_progress32", "", wsChild|wsVisible, 42, 470, 890, 18, 0)
 	procSendMessage.Call(ui.progress, pbmSetRange32, 0, 100)
 	ui.log = makeControl(hwnd, "LISTBOX", "", wsChild|wsVisible|wsBorder|wsVScroll|lbsNoIntegral, 42, 512, 890, 150, 0)
-	logLine("就绪。耗时操作将在后台执行，界面不会因扫描或合并而阻塞。")
-	if addons == "" {
-		logLine("未自动找到游戏目录，请手动选择 left4dead2\\addons。")
-	} else {
-		logLine("已找到游戏目录：" + addons)
-	}
-	logLine("JSON 状态目录：" + ui.stateDir)
-	if stateFilesMigrationErr != nil {
-		logLine("顶级 JSON 迁移未完全完成：" + stateFilesMigrationErr.Error())
-	} else if stateFilesMigrated > 0 {
-		logLine(fmt.Sprintf("已将 %d 个顶级 JSON 迁移到 data 目录。", stateFilesMigrated))
-	}
-	if settingsErr != nil {
-		logLine("目录设置读取失败，已使用自动检测值：" + settingsErr.Error())
-	} else if settings.Source != "" || settings.Output != "" || settings.Addons != "" {
-		logLine("已加载上次保存的目录设置。")
-	}
-	if deploymentMigrationErr != nil {
-		logLine("部署记录迁移失败：" + deploymentMigrationErr.Error())
-	} else if deploymentMigrated {
-		logLine("旧版部署记录已升级为多目录格式。")
-	}
-	if err := saveCurrentDirectorySettings(); err != nil {
-		logLine("保存目录设置失败：" + err.Error())
-	}
+	logLine("正在后台加载设置和迁移状态…")
+	ui.busy = true
+	setButtons(false)
+	setStartupInputs(false)
+	stateDir := ui.stateDir
+	go func() {
+		startupMark("state_init_begin")
+		result := prepareStartupState(stateRoot, stateDir, base, detectAddonsDir)
+		startupMark("state_init_end")
+		postEvent(appEvent{Kind: "startup-ready", Data: result})
+	}()
+
 }
 
 func makeControl(parent uintptr, class, text string, style uint32, x, y, width, height, id int) uintptr {
@@ -498,7 +493,68 @@ func makeLabel(parent uintptr, text string, x, y, width, height int) uintptr {
 	return makeControl(parent, "STATIC", text, wsChild|wsVisible, x, y, width, height, 0)
 }
 func makeButton(parent uintptr, text string, x, y, width, height, id int) uintptr {
-	return makeControl(parent, "BUTTON", text, wsChild|wsVisible|wsTabStop|bsPushButton, x, y, width, height, id)
+	return makeControl(parent, "BUTTON", text, wsChild|wsVisible|wsTabStop|bsOwnerDraw, x, y, width, height, id)
+}
+
+func drawThemedButton(item *drawItemStruct) {
+	if item == nil {
+		return
+	}
+	bg, accent, text := themedButtonStyle(int(item.CtlID))
+	if item.ItemState&odsSelected != 0 {
+		bg = rgb(48, 58, 76)
+	}
+	disabled := item.ItemState&odsDisabled != 0
+	if disabled {
+		bg = rgb(30, 35, 43)
+		accent = rgb(76, 86, 100)
+	}
+	brush, _, _ := procCreateBrush.Call(uintptr(bg))
+	procFillRect.Call(item.HDC, uintptr(unsafe.Pointer(&item.RcItem)), brush)
+	procDeleteObject.Call(brush)
+	strip := item.RcItem
+	strip.Right = strip.Left + 5
+	stripBrush, _, _ := procCreateBrush.Call(uintptr(accent))
+	procFillRect.Call(item.HDC, uintptr(unsafe.Pointer(&strip)), stripBrush)
+	procDeleteObject.Call(stripBrush)
+	procSetBkMode.Call(item.HDC, 1)
+	textColor := rgb(244, 248, 252)
+	if disabled {
+		textColor = rgb(132, 142, 156)
+	}
+	procSetTextColor.Call(item.HDC, uintptr(textColor))
+	procSelectObject.Call(item.HDC, ui.font)
+	p := utf16(text)
+	r := item.RcItem
+	r.Left += 8
+	procDrawText.Call(item.HDC, uintptr(unsafe.Pointer(p)), ^uintptr(0), uintptr(unsafe.Pointer(&r)), dtCenter|dtVCenter|dtSingleLine)
+}
+
+func themedButtonStyle(id int) (uint32, uint32, string) {
+	switch id {
+	case idScan:
+		return rgb(35, 59, 82), rgb(82, 174, 255), "智能扫描 MOD"
+	case idMerge:
+		return rgb(45, 43, 82), rgb(190, 143, 255), "一键分类合并"
+	case idDeploy:
+		return rgb(32, 74, 58), rgb(112, 220, 145), "部署并禁用原 MOD"
+	case idRestore:
+		return rgb(79, 50, 42), rgb(245, 164, 94), "一键还原官方 MOD"
+	case idBrowseSrc, idBrowseOut, idBrowseGame:
+		return rgb(45, 53, 66), rgb(172, 185, 204), "浏览"
+	case idConflictRecommend:
+		return rgb(45, 43, 82), rgb(190, 143, 255), "全部采用推荐"
+	case idConflictConfirm:
+		return rgb(32, 74, 58), rgb(112, 220, 145), "确认并开始合并"
+	case idConflictCancel:
+		return rgb(77, 47, 55), rgb(242, 112, 126), "取消"
+	default:
+		return rgb(40, 52, 68), rgb(82, 174, 255), ""
+	}
+}
+
+func rgb(r, g, b byte) uint32 {
+	return uint32(r) | uint32(g)<<8 | uint32(b)<<16
 }
 
 func handleCommand(id int) {
@@ -1083,6 +1139,22 @@ func handleEvent(id uint64) {
 	}
 	event := value.(appEvent)
 	switch event.Kind {
+	case "startup-ready":
+		result := event.Data.(startupState)
+		ui.preserveInvalidSettings = result.SettingsError
+		setText(ui.source, result.Source)
+		setText(ui.output, result.Output)
+		setText(ui.addons, result.Addons)
+		initWeaponVolumeControls(result.Settings)
+		setText(ui.weaponCustom, result.Settings.CustomWeaponSoundVolume)
+		for _, message := range result.Messages {
+			logLine(message)
+		}
+		ui.busy = false
+		setButtons(true)
+		setStartupInputs(true)
+		startupReady(ui.hwnd)
+		logLine("就绪。耗时操作将在后台执行。")
 	case "progress":
 		position := int64(0)
 		if event.Total > 0 {

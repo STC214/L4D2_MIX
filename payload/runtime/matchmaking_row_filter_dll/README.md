@@ -1,8 +1,8 @@
-# Matchmaking Row Filter：原版运行载荷
+# Matchmaking Row Filter：根目录运行载荷
 
-[原版项目说明](../../../README.md) · [Loader 运行说明](../matchmaking_probe_loader/README.md)
+[根目录项目说明](../../../README.md) · [Loader 运行说明](../matchmaking_probe_loader/README.md)
 
-文档更新：2026-10-08（Asia/Shanghai）。这里是根目录原版的预构建过滤器载荷，不包含优化版的启动缓存和首帧修复。
+文档更新：2026-10-08（Asia/Shanghai）。这里是根目录的预构建运行载荷；根目录宿主已同步优化副本的启动缓存、调度和首帧修复。Loader/DLL 本体仍为仓库内原有预构建文件，宿主优化不代表修改它们的二进制。
 
 ## 文件与模式
 

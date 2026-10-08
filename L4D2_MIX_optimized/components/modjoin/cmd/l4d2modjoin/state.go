@@ -427,6 +427,9 @@ func validateBuildProgress(output, stateDir string, result *modscan.Result, prog
 	if err := json.Unmarshal(data, &manifest); err != nil {
 		return buildManifest{}, err
 	}
+	if err := validateBuiltFiles(manifest.Files, true); err != nil {
+		return buildManifest{}, err
+	}
 	if manifest.Fingerprint != result.Fingerprint || cleanPath(manifest.Source) != cleanPath(result.Directory) {
 		return buildManifest{}, fmt.Errorf("构建产物与当前扫描结果不一致，请重新合并")
 	}

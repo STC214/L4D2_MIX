@@ -99,3 +99,31 @@ func TestImportLegacyModJoinStateCopiesMissingAndPreservesConflicts(t *testing.T
 		t.Fatalf("invalid import marker: %v %#v", err, stored)
 	}
 }
+
+func TestChooseStatusKeepsRecentImportantMessage(t *testing.T) {
+	got := chooseStatus([]string{
+		"内置组件已准备，正在打开三个功能页…",
+		"连跳辅助启动失败：等待窗口超时",
+		"MOD 分类合并已就绪",
+	})
+	if got != "连跳辅助启动失败：等待窗口超时" {
+		t.Fatalf("chooseStatus() = %q", got)
+	}
+}
+
+func TestWriteFileAtomicReplacesExistingFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.json")
+	if err := os.WriteFile(path, []byte("old"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeFileAtomic(path, []byte("new")); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "new" {
+		t.Fatalf("file content = %q", data)
+	}
+}

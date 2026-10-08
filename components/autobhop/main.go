@@ -62,6 +62,7 @@ const (
 	WM_COMMAND         = 0x0111
 	WM_CREATE          = 0x0001
 	WM_DESTROY         = 0x0002
+	WM_DRAWITEM        = 0x002B
 	WM_CTLCOLORSTATIC  = 0x0138
 	WM_CTLCOLOREDIT    = 0x0133
 	WM_CTLCOLORLISTBOX = 0x0134
@@ -92,7 +93,12 @@ const (
 	ES_AUTOHSCROLL     = 0x0080
 	ES_READONLY        = 0x0800
 	BS_PUSHBUTTON      = 0x00000000
+	BS_OWNERDRAW       = 0x0000000B
 	SS_LEFT            = 0x00000000
+	DT_CENTER          = 0x0001
+	DT_VCENTER         = 0x0004
+	DT_SINGLELINE      = 0x0020
+	ODS_SELECTED       = 0x0001
 	IMAGE_ICON         = 1
 	ICON_SMALL         = 0
 	ICON_BIG           = 1
@@ -120,6 +126,7 @@ var (
 	user32   = syscall.NewLazyDLL("user32.dll")
 	kernel32 = syscall.NewLazyDLL("kernel32.dll")
 	gdi32    = syscall.NewLazyDLL("gdi32.dll")
+	dwmapi   = syscall.NewLazyDLL("dwmapi.dll")
 
 	procCreateWindowExW          = user32.NewProc("CreateWindowExW")
 	procDefWindowProcW           = user32.NewProc("DefWindowProcW")
@@ -145,6 +152,8 @@ var (
 	procSetWindowTextW           = user32.NewProc("SetWindowTextW")
 	procShowWindow               = user32.NewProc("ShowWindow")
 	procTranslateMessage         = user32.NewProc("TranslateMessage")
+	procFillRect                 = user32.NewProc("FillRect")
+	procDrawTextW                = user32.NewProc("DrawTextW")
 
 	procCloseHandle              = kernel32.NewProc("CloseHandle")
 	procCreateToolhelp32Snapshot = kernel32.NewProc("CreateToolhelp32Snapshot")
@@ -156,11 +165,15 @@ var (
 
 	procCreateSolidBrush = gdi32.NewProc("CreateSolidBrush")
 	procCreateFontW      = gdi32.NewProc("CreateFontW")
+	procDeleteObject     = gdi32.NewProc("DeleteObject")
+	procSelectObject     = gdi32.NewProc("SelectObject")
 
 	procShellNotifyIconW = syscall.NewLazyDLL("shell32.dll").NewProc("Shell_NotifyIconW")
+	procDwmSetAttr       = dwmapi.NewProc("DwmSetWindowAttribute")
 )
 
 type point struct{ x, y int32 }
+type rect struct{ left, top, right, bottom int32 }
 type msg struct {
 	hwnd    uintptr
 	message uint32
@@ -168,6 +181,12 @@ type msg struct {
 	lParam  uintptr
 	time    uint32
 	pt      point
+}
+type drawItemStruct struct {
+	ctlType, ctlID, itemID, itemAction, itemState uint32
+	hwndItem, hdc                                 uintptr
+	rcItem                                        rect
+	itemData                                      uintptr
 }
 type wndClassEx struct {
 	cbSize        uint32
@@ -290,6 +309,7 @@ type appState struct {
 var state = &appState{controls: make(map[int]uintptr)}
 
 func main() {
+	startupMark("main")
 	runtime.LockOSThread()
 	embedParent := embeddedParent()
 
@@ -332,8 +352,10 @@ func main() {
 		parent, 0, hInstance, 0,
 	)
 	state.hwnd = hwnd
+	startupReady(hwnd)
 	applyWindowIcons(hwnd)
 	if embedParent == 0 {
+		enableDarkTitleBar(hwnd)
 		procShowWindow.Call(hwnd, SW_SHOW)
 	}
 
@@ -360,13 +382,29 @@ func embeddedParent() uintptr {
 	return uintptr(parent)
 }
 
+func enableDarkTitleBar(hwnd uintptr) {
+	enabled := int32(1)
+	if result, _, _ := procDwmSetAttr.Call(hwnd, 20, uintptr(unsafe.Pointer(&enabled)), unsafe.Sizeof(enabled)); int32(result) != 0 {
+		procDwmSetAttr.Call(hwnd, 19, uintptr(unsafe.Pointer(&enabled)), unsafe.Sizeof(enabled))
+	}
+}
+
 func wndProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 	switch msg {
 	case WM_CREATE:
 		createUI(hwnd)
-		refreshTargets()
+		procPostMessageW.Call(hwnd, 0x8005, 0, 0)
 		setStatus(statusIdle)
 		return 0
+	case 0x8005:
+		startupMark("target_refresh_begin")
+		refreshTargets()
+		startupMark("target_refresh_end")
+		return 0
+	case 0x000F:
+		ret, _, _ := procDefWindowProcW.Call(hwnd, uintptr(msg), wParam, lParam)
+		startupFirstPaint()
+		return ret
 	case WM_COMMAND:
 		id := int(wParam & 0xffff)
 		code := int((wParam >> 16) & 0xffff)
@@ -386,6 +424,9 @@ func wndProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 			}
 		}
 		return 0
+	case WM_DRAWITEM:
+		drawButton((*drawItemStruct)(unsafe.Pointer(lParam)))
+		return 1
 	case wmAppStatus:
 		setStatus(int(wParam))
 		return 0
@@ -430,6 +471,7 @@ func wndProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 }
 
 func createUI(hwnd uintptr) {
+	startupMark("controls_begin")
 	state.font, _, _ = procCreateFontW.Call(
 		neg(16), 0, 0, 0, 500, 0, 0, 0, 1, 0, 0, 5, 0,
 		uintptr(unsafe.Pointer(utf16Ptr("Segoe UI"))),
@@ -557,6 +599,10 @@ func createText(parent uintptr, x, y, w, h int32, text string, title bool) uintp
 }
 
 func createControl(class, text string, style uintptr, x, y, w, height int32, parent uintptr, id int) uintptr {
+	if class == "BUTTON" {
+		style &^= BS_PUSHBUTTON
+		style |= BS_OWNERDRAW
+	}
 	hwnd, _, _ := procCreateWindowExW.Call(
 		0,
 		uintptr(unsafe.Pointer(utf16Ptr(class))),
@@ -569,6 +615,69 @@ func createControl(class, text string, style uintptr, x, y, w, height int32, par
 		procSendMessageW.Call(hwnd, WM_SETFONT, state.font, 1)
 	}
 	return hwnd
+}
+
+func drawButton(item *drawItemStruct) {
+	if item == nil {
+		return
+	}
+	bg, accent := buttonColors(int(item.ctlID))
+	if item.itemState&ODS_SELECTED != 0 {
+		bg = rgb(47, 58, 76)
+	}
+	brush := createBrush(bg)
+	procFillRect.Call(item.hdc, uintptr(unsafe.Pointer(&item.rcItem)), brush)
+	procDeleteObject.Call(brush)
+	strip := item.rcItem
+	strip.right = strip.left + 4
+	stripBrush := createBrush(accent)
+	procFillRect.Call(item.hdc, uintptr(unsafe.Pointer(&strip)), stripBrush)
+	procDeleteObject.Call(stripBrush)
+	procSetBkMode.Call(item.hdc, 1)
+	procSetTextColor.Call(item.hdc, uintptr(rgb(244, 248, 252)))
+	procSelectObject.Call(item.hdc, state.font)
+	text := buttonText(int(item.ctlID))
+	p := utf16Ptr(text)
+	r := item.rcItem
+	r.left += 8
+	procDrawTextW.Call(item.hdc, uintptr(unsafe.Pointer(p)), ^uintptr(0), uintptr(unsafe.Pointer(&r)), DT_CENTER|DT_VCENTER|DT_SINGLELINE)
+}
+
+func buttonColors(id int) (uint32, uint32) {
+	switch id {
+	case idStartBtn:
+		return rgb(32, 78, 58), rgb(113, 221, 145)
+	case idStopBtn:
+		return rgb(86, 44, 53), rgb(244, 112, 126)
+	case idDetectBtn:
+		return rgb(51, 43, 82), rgb(193, 145, 255)
+	default:
+		return rgb(31, 58, 78), rgb(74, 198, 236)
+	}
+}
+
+func buttonText(id int) string {
+	switch id {
+	case idRefreshBtn:
+		return "刷新"
+	case idDetectBtn:
+		return "自动探测"
+	case idStartBtn:
+		return "启动"
+	case idStopBtn:
+		return "停止"
+	default:
+		return ""
+	}
+}
+
+func createBrush(color uint32) uintptr {
+	brush, _, _ := procCreateSolidBrush.Call(uintptr(color))
+	return brush
+}
+
+func rgb(r, g, b byte) uint32 {
+	return uint32(r) | uint32(g)<<8 | uint32(b)<<16
 }
 
 func refreshTargets() {
@@ -607,20 +716,29 @@ func selectedTarget() (targetWindow, bool) {
 	return targetWindow{}, false
 }
 
-func enumerateGameWindows() []targetWindow {
-	var out []targetWindow
-	cb := syscall.NewCallback(func(hwnd uintptr, lParam uintptr) uintptr {
-		if isWindowVisible(hwnd) && getWindowTextLength(hwnd) > 0 {
-			title := getWindowTitle(hwnd)
-			if strings.Contains(strings.ToLower(title), "left 4 dead 2") {
-				var pid uint32
-				procGetWindowThreadProcessId.Call(hwnd, uintptr(unsafe.Pointer(&pid)))
-				out = append(out, targetWindow{hwnd: hwnd, pid: pid, title: title})
-			}
+var gameWindowEnumMu sync.Mutex
+var gameWindowEnumResults []targetWindow
+var gameWindowEnumCallback = syscall.NewCallback(func(hwnd uintptr, _ uintptr) uintptr {
+	if isWindowVisible(hwnd) && getWindowTextLength(hwnd) > 0 {
+		title := getWindowTitle(hwnd)
+		if strings.Contains(strings.ToLower(title), "left 4 dead 2") {
+			var pid uint32
+			procGetWindowThreadProcessId.Call(hwnd, uintptr(unsafe.Pointer(&pid)))
+			gameWindowEnumResults = append(gameWindowEnumResults, targetWindow{hwnd: hwnd, pid: pid, title: title})
 		}
-		return 1
-	})
-	procEnumWindows.Call(cb, 0)
+	}
+	return 1
+})
+
+func enumerateGameWindows() []targetWindow {
+	// Go callbacks remain allocated for process lifetime. Reuse one even after
+	// thousands of refreshes, with serialized scratch state for the native call.
+	gameWindowEnumMu.Lock()
+	defer gameWindowEnumMu.Unlock()
+	gameWindowEnumResults = nil
+	procEnumWindows.Call(gameWindowEnumCallback, 0)
+	out := gameWindowEnumResults
+	gameWindowEnumResults = nil
 	return out
 }
 
@@ -657,10 +775,14 @@ func startWorker() {
 func stopWorker(status int) {
 	state.mu.Lock()
 	if state.running && state.stop != nil {
-		close(state.stop)
+		select {
+		case <-state.stop:
+		default:
+			close(state.stop)
+		}
 	}
-	state.running = false
-	state.stop = nil
+	// Keep ownership until the worker releases any held key and exits. Starting
+	// a replacement earlier lets the old worker reset the new worker's state.
 	state.mu.Unlock()
 	setStatus(status)
 }
@@ -999,10 +1121,10 @@ func waitForClientBaseTimeout(pid uint32, timeout time.Duration) uintptr {
 }
 
 func runBhop(cfg settings, stop <-chan struct{}) {
+	defer markStopped(stop)
 	hProcess, _, _ := procOpenProcess.Call(PROCESS_VM_READ|PROCESS_QUERY_LIMITED_INFO, 0, uintptr(cfg.pid))
 	if hProcess == 0 {
 		postStatus(statusErrorOpenProcess)
-		markStopped()
 		return
 	}
 	defer procCloseHandle.Call(hProcess)
@@ -1010,12 +1132,10 @@ func runBhop(cfg settings, stop <-chan struct{}) {
 	clientBase, stopped := waitForClientBase(cfg.pid, stop)
 	if stopped {
 		postStatus(statusStopped)
-		markStopped()
 		return
 	}
 	if clientBase == 0 {
 		postStatus(statusErrorClientDLL)
-		markStopped()
 		return
 	}
 	postStatus(statusRunning)
@@ -1037,7 +1157,6 @@ func runBhop(cfg settings, stop <-chan struct{}) {
 					postKey(cfg.hwnd, WM_KEYUP)
 				}
 				postStatus(statusGameClosed)
-				markStopped()
 				return
 			}
 			key, _, _ := procGetAsyncKeyState.Call(VK_SPACE)
@@ -1106,7 +1225,11 @@ func waitForClientBase(pid uint32, stop <-chan struct{}) (uintptr, bool) {
 		if base != 0 {
 			return base, false
 		}
-		time.Sleep(750 * time.Millisecond)
+		select {
+		case <-stop:
+			return 0, true
+		case <-time.After(750 * time.Millisecond):
+		}
 	}
 }
 
@@ -1154,10 +1277,12 @@ func postKey(hwnd uintptr, message uint32) {
 	procSendMessageW.Call(hwnd, uintptr(message), VK_SPACE, SPACE_KEY_LPARAM)
 }
 
-func markStopped() {
+func markStopped(stop <-chan struct{}) {
 	state.mu.Lock()
-	state.running = false
-	state.stop = nil
+	if state.stop == stop {
+		state.running = false
+		state.stop = nil
+	}
 	state.mu.Unlock()
 }
 

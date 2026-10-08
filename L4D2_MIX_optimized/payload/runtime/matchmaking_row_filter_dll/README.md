@@ -2,7 +2,7 @@
 
 [优化版项目说明](../../../README.md) · [Loader 运行说明](../matchmaking_probe_loader/README.md)
 
-文档更新：2026-10-08（Asia/Shanghai）。本文件属于优化版预构建载荷；根目录原版另有独立载荷和 README。
+文档更新：2026-10-08（Asia/Shanghai）。本文件属于优化版预构建载荷；根目录已同步宿主优化，但两处 EXE 同级数据和说明路径独立。
 
 ## 文件与模式
 

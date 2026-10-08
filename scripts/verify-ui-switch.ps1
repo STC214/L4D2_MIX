@@ -1,7 +1,8 @@
-param(
+﻿param(
     [Parameter(Mandatory = $true)]
     [string]$OutputPath,
-    [string]$ScreenshotDir = ""
+    [string]$ScreenshotDir = "",
+    [int[]]$ExcludeProcessId = @()
 )
 
 $ErrorActionPreference = "Stop"
@@ -96,7 +97,13 @@ function Get-Children([IntPtr]$Root) {
     return $script:found
 }
 
-$process = Get-Process L4D2_MIX | Select-Object -First 1
+$process = Get-Process L4D2_MIX -ErrorAction SilentlyContinue |
+    Where-Object { $ExcludeProcessId -notcontains $_.Id -and $_.MainWindowHandle -ne 0 } |
+    Sort-Object StartTime -Descending |
+    Select-Object -First 1
+if (!$process) {
+    throw "L4D2_MIX process with a main window was not found."
+}
 $tabs = @(
     @{ Name = "bhop"; ID = 101 },
     @{ Name = "filter"; ID = 102 },
@@ -156,3 +163,9 @@ foreach ($iteration in 1..30) {
 }
 
 $results | ConvertTo-Json | Set-Content -LiteralPath $OutputPath -Encoding UTF8
+
+if (@($results | Where-Object { -not $_.Expected -or -not $_.Responding }).Count -gt 0) {
+    throw "UI switch verification failed; inspect $OutputPath"
+}
+if (@($pages).Count -ne 3) { throw "Expected all three embedded pages" }
+Write-Host "PASS: 30 page switches; selected page enabled and visible, inactive pages hidden and disabled."

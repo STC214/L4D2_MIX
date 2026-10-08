@@ -26,13 +26,16 @@ function Assert-CommandAvailable([string]$Command) {
 Assert-CommandAvailable "go"
 Assert-CommandAvailable "windres.exe"
 
+$previousGoCache = $env:GOCACHE
+$previousGoTmp = $env:GOTMPDIR
+try {
 New-Item -ItemType Directory -Force -Path $payloadDir, $distDir, $goCacheDir, $goTmpDir | Out-Null
 $env:GOCACHE = $goCacheDir
 $env:GOTMPDIR = $goTmpDir
 
 Push-Location (Join-Path $projectRoot "components\autobhop")
 try {
-    go test ./...
+    go test -count=1 -timeout=120s ./...
     Assert-NativeSuccess "Autobhop tests"
     go build -trimpath -ldflags "-H=windowsgui -s -w" `
         -o (Join-Path $payloadDir "L4D2AutobhopVPKW.exe") .
@@ -44,7 +47,7 @@ finally {
 
 Push-Location (Join-Path $projectRoot "components\rowfilter")
 try {
-    go test ./...
+    go test -count=1 -timeout=120s ./...
     Assert-NativeSuccess "Row filter tests"
     go build -trimpath -ldflags "-H=windowsgui -s -w" `
         -o (Join-Path $payloadDir "L4D2RowFilterManager.exe") .
@@ -56,7 +59,7 @@ finally {
 
 Push-Location (Join-Path $projectRoot "components\modjoin")
 try {
-    go test ./...
+    go test -count=1 -timeout=120s ./...
     Assert-NativeSuccess "MOD join tests"
     go build -trimpath -ldflags "-H=windowsgui -s -w" `
         -o (Join-Path $payloadDir "L4D2ModJoin.exe") .\cmd\l4d2modjoin
@@ -95,7 +98,7 @@ Push-Location $projectRoot
 try {
     windres.exe .\app.rc -O coff -o .\app.syso
     Assert-NativeSuccess "Resource build"
-    go test ./...
+    go test -count=1 -timeout=120s ./...
     Assert-NativeSuccess "Host tests"
     go build -trimpath -ldflags "-H=windowsgui -s -w" -o (Join-Path $distDir "L4D2_MIX.exe") .
     Assert-NativeSuccess "Host build"
@@ -149,3 +152,7 @@ Compress-Archive -LiteralPath $portableExe,$portableReadme -DestinationPath $por
 $hash = (Get-FileHash -LiteralPath $portableZip -Algorithm SHA256).Hash.ToLowerInvariant()
 [IO.File]::WriteAllText(($portableZip + ".sha256"), "$hash  L4D2_MIX-portable.zip`n", [Text.UTF8Encoding]::new($false))
 Write-Host "Portable archive created: $portableZip"
+} finally {
+    $env:GOCACHE = $previousGoCache
+    $env:GOTMPDIR = $previousGoTmp
+}

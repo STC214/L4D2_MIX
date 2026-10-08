@@ -3,6 +3,7 @@ package main
 import (
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestParseSavedConfigAcceptsUTF8BOM(t *testing.T) {
@@ -33,5 +34,31 @@ func TestConfigPathUsesMixDataRoot(t *testing.T) {
 	want := filepath.Join(root, "data", "autobhop-settings.json")
 	if got := configPath(); got != want {
 		t.Fatalf("configPath() = %q, want %q", got, want)
+	}
+}
+
+func TestWorkerCompletionRetainsNewOwner(t *testing.T) {
+	old := make(chan struct{})
+	current := make(chan struct{})
+	state.stop, state.running = current, true
+	defer func() { state.stop, state.running = nil, false }()
+	markStopped(old)
+	if state.stop != current || !state.running {
+		t.Fatal("old worker cleared new owner")
+	}
+	markStopped(current)
+	if state.stop != nil || state.running {
+		t.Fatal("current worker did not finish")
+	}
+}
+
+func TestClientBaseWaitStopsWithoutWaitingForNextPoll(t *testing.T) {
+	stop := make(chan struct{})
+	timer := time.AfterFunc(10*time.Millisecond, func() { close(stop) })
+	defer timer.Stop()
+	start := time.Now()
+	base, stopped := waitForClientBase(0, stop)
+	if base != 0 || !stopped || time.Since(start) > 500*time.Millisecond {
+		t.Fatalf("stop delayed: base=%x stopped=%v elapsed=%v", base, stopped, time.Since(start))
 	}
 }
