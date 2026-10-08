@@ -206,6 +206,7 @@ type appEvent struct {
 }
 
 type uiState struct {
+	preserveInvalidSettings                     bool
 	hwnd, source, output, addons, log, progress uintptr
 	weaponVolume, weaponCustom                  uintptr
 	scan, merge, deploy, restore                uintptr
@@ -225,6 +226,7 @@ var (
 func utf16(value string) *uint16 { return syscall.StringToUTF16Ptr(value) }
 
 func main() {
+	startupMark("main")
 	runtime.LockOSThread()
 	embedParent := embeddedParent()
 	procCoInitializeEx.Call(0, 2)
@@ -337,11 +339,13 @@ func windowProc(hwnd uintptr, message uint32, wParam, lParam uintptr) uintptr {
 			ui.scanResult = nil
 		}
 		if isDirectoryEdit(id) && code == enKillFocus {
+			ui.preserveInvalidSettings = false
 			if err := saveCurrentDirectorySettings(); err != nil {
 				logLine("保存目录设置失败：" + err.Error())
 			}
 		}
 		if (id == idWeaponVolume && code == cbnSelChange) || (id == idWeaponCustom && code == enKillFocus) {
+			ui.preserveInvalidSettings = false
 			if err := saveCurrentDirectorySettings(); err != nil {
 				logLine("保存音量设置失败：" + err.Error())
 			}
@@ -373,6 +377,7 @@ func windowProc(hwnd uintptr, message uint32, wParam, lParam uintptr) uintptr {
 		procSetBkColor.Call(wParam, 0x00352E2A)
 		return ui.fieldBrush
 	case wmPaint:
+		defer startupFirstPaint()
 		paintWindow(hwnd)
 		return 0
 	case wmEraseBkgnd:
@@ -383,8 +388,10 @@ func windowProc(hwnd uintptr, message uint32, wParam, lParam uintptr) uintptr {
 			logLine("任务仍在运行，请等待完成后关闭。")
 			return 0
 		}
-		if err := saveCurrentDirectorySettings(); err != nil {
-			logLine("保存目录设置失败：" + err.Error())
+		if !ui.preserveInvalidSettings {
+			if err := saveCurrentDirectorySettings(); err != nil {
+				logLine("保存目录设置失败：" + err.Error())
+			}
 		}
 	case wmDestroy:
 		if ui.font != 0 {
@@ -407,6 +414,7 @@ func windowProc(hwnd uintptr, message uint32, wParam, lParam uintptr) uintptr {
 }
 
 func createUI(hwnd uintptr) {
+	startupMark("controls_begin")
 	ui.bgBrush, _, _ = procCreateBrush.Call(0x00241E1B)
 	ui.fieldBrush, _, _ = procCreateBrush.Call(0x00352E2A)
 	cwd, _ := os.Getwd()
@@ -427,29 +435,10 @@ func createUI(hwnd uintptr) {
 	} else {
 		ui.stateDir = filepath.Join(stateRoot, stateDirectoryName)
 	}
-	stateFilesMigrated, stateFilesMigrationErr := migrateRootStateFiles(stateRoot, ui.stateDir)
-	deploymentMigrated, deploymentMigrationErr := migrateDeploymentRegistry(ui.stateDir)
-	addons := detectAddonsDir()
 	source := filepath.Join(base, "workshop")
-	if addons != "" {
-		subscriptions := filepath.Join(addons, "workshop")
-		if info, err := os.Stat(subscriptions); err == nil && info.IsDir() {
-			source = subscriptions
-		}
-	}
 	output := filepath.Join(base, "merged")
-	settings, settingsErr := loadAppSettings(ui.stateDir)
-	if settingsErr == nil {
-		if settings.Source != "" {
-			source = settings.Source
-		}
-		if settings.Output != "" {
-			output = settings.Output
-		}
-		if settings.Addons != "" {
-			addons = settings.Addons
-		}
-	}
+	addons := ""
+	settings := appSettings{Version: 1, WeaponSoundVolumePercent: 100}
 	ui.font, _, _ = procCreateFont.Call(19, 0, 0, 0, 400, 0, 0, 0, 134, 0, 0, 5, 0, uintptr(unsafe.Pointer(utf16("Segoe UI"))))
 	ui.titleFont, _, _ = procCreateFont.Call(34, 0, 0, 0, 600, 0, 0, 0, 134, 0, 0, 5, 0, uintptr(unsafe.Pointer(utf16("Segoe UI"))))
 
@@ -475,31 +464,18 @@ func createUI(hwnd uintptr) {
 	ui.progress = makeControl(hwnd, "msctls_progress32", "", wsChild|wsVisible, 42, 470, 890, 18, 0)
 	procSendMessage.Call(ui.progress, pbmSetRange32, 0, 100)
 	ui.log = makeControl(hwnd, "LISTBOX", "", wsChild|wsVisible|wsBorder|wsVScroll|lbsNoIntegral, 42, 512, 890, 150, 0)
-	logLine("就绪。耗时操作将在后台执行，界面不会因扫描或合并而阻塞。")
-	if addons == "" {
-		logLine("未自动找到游戏目录，请手动选择 left4dead2\\addons。")
-	} else {
-		logLine("已找到游戏目录：" + addons)
-	}
-	logLine("JSON 状态目录：" + ui.stateDir)
-	if stateFilesMigrationErr != nil {
-		logLine("顶级 JSON 迁移未完全完成：" + stateFilesMigrationErr.Error())
-	} else if stateFilesMigrated > 0 {
-		logLine(fmt.Sprintf("已将 %d 个顶级 JSON 迁移到 data 目录。", stateFilesMigrated))
-	}
-	if settingsErr != nil {
-		logLine("目录设置读取失败，已使用自动检测值：" + settingsErr.Error())
-	} else if settings.Source != "" || settings.Output != "" || settings.Addons != "" {
-		logLine("已加载上次保存的目录设置。")
-	}
-	if deploymentMigrationErr != nil {
-		logLine("部署记录迁移失败：" + deploymentMigrationErr.Error())
-	} else if deploymentMigrated {
-		logLine("旧版部署记录已升级为多目录格式。")
-	}
-	if err := saveCurrentDirectorySettings(); err != nil {
-		logLine("保存目录设置失败：" + err.Error())
-	}
+	logLine("正在后台加载设置和迁移状态…")
+	ui.busy = true
+	setButtons(false)
+	setStartupInputs(false)
+	stateDir := ui.stateDir
+	go func() {
+		startupMark("state_init_begin")
+		result := prepareStartupState(stateRoot, stateDir, base, detectAddonsDir)
+		startupMark("state_init_end")
+		postEvent(appEvent{Kind: "startup-ready", Data: result})
+	}()
+
 }
 
 func makeControl(parent uintptr, class, text string, style uint32, x, y, width, height, id int) uintptr {
@@ -1160,6 +1136,22 @@ func handleEvent(id uint64) {
 	}
 	event := value.(appEvent)
 	switch event.Kind {
+	case "startup-ready":
+		result := event.Data.(startupState)
+		ui.preserveInvalidSettings = result.SettingsError
+		setText(ui.source, result.Source)
+		setText(ui.output, result.Output)
+		setText(ui.addons, result.Addons)
+		initWeaponVolumeControls(result.Settings)
+		setText(ui.weaponCustom, result.Settings.CustomWeaponSoundVolume)
+		for _, message := range result.Messages {
+			logLine(message)
+		}
+		ui.busy = false
+		setButtons(true)
+		setStartupInputs(true)
+		startupReady(ui.hwnd)
+		logLine("就绪。耗时操作将在后台执行。")
 	case "progress":
 		position := int64(0)
 		if event.Total > 0 {

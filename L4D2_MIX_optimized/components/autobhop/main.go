@@ -309,6 +309,7 @@ type appState struct {
 var state = &appState{controls: make(map[int]uintptr)}
 
 func main() {
+	startupMark("main")
 	runtime.LockOSThread()
 	embedParent := embeddedParent()
 
@@ -351,6 +352,7 @@ func main() {
 		parent, 0, hInstance, 0,
 	)
 	state.hwnd = hwnd
+	startupReady(hwnd)
 	applyWindowIcons(hwnd)
 	if embedParent == 0 {
 		enableDarkTitleBar(hwnd)
@@ -391,9 +393,18 @@ func wndProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 	switch msg {
 	case WM_CREATE:
 		createUI(hwnd)
-		refreshTargets()
+		procPostMessageW.Call(hwnd, 0x8005, 0, 0)
 		setStatus(statusIdle)
 		return 0
+	case 0x8005:
+		startupMark("target_refresh_begin")
+		refreshTargets()
+		startupMark("target_refresh_end")
+		return 0
+	case 0x000F:
+		ret, _, _ := procDefWindowProcW.Call(hwnd, uintptr(msg), wParam, lParam)
+		startupFirstPaint()
+		return ret
 	case WM_COMMAND:
 		id := int(wParam & 0xffff)
 		code := int((wParam >> 16) & 0xffff)
@@ -460,6 +471,7 @@ func wndProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 }
 
 func createUI(hwnd uintptr) {
+	startupMark("controls_begin")
 	state.font, _, _ = procCreateFontW.Call(
 		neg(16), 0, 0, 0, 500, 0, 0, 0, 1, 0, 0, 5, 0,
 		uintptr(unsafe.Pointer(utf16Ptr("Segoe UI"))),

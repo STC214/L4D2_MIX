@@ -269,6 +269,7 @@ var oldLogEditProc uintptr
 var logEditCallback uintptr
 
 func main() {
+	startupMark("main")
 	runtime.LockOSThread()
 	if !isAdmin() {
 		relaunchAsAdmin()
@@ -349,6 +350,7 @@ func runUI() {
 		parent, 0, hinst, 0,
 	)
 	app.hwnd = hwnd
+	startupReady(hwnd)
 	if appIcon != 0 {
 		procSendMessage.Call(hwnd, WM_SETICON, ICON_BIG, appIcon)
 		procSendMessage.Call(hwnd, WM_SETICON, ICON_SMALL, appIcon)
@@ -395,8 +397,10 @@ func wndProc(hwnd uintptr, msg uint32, wparam, lparam uintptr) uintptr {
 		app.hwnd = hwnd
 		createControls(hwnd)
 		procSetTimer.Call(hwnd, ID_TIMER, 350, 0)
+		startupMark("rules_load_begin")
 		loadConfigsToUI()
 		refreshLogTail()
+		startupMark("rules_load_end")
 		return 0
 	case WM_SIZE:
 		if wparam == SIZE_MINIMIZED {
@@ -414,6 +418,10 @@ func wndProc(hwnd uintptr, msg uint32, wparam, lparam uintptr) uintptr {
 			return 0
 		}
 		return 0
+	case 0x000F:
+		ret, _, _ := procDefWindowProc.Call(hwnd, uintptr(msg), wparam, lparam)
+		startupFirstPaint()
+		return ret
 	case WM_COMMAND:
 		handleCommand(int(wparam & 0xffff))
 		return 0
@@ -446,6 +454,7 @@ func wndProc(hwnd uintptr, msg uint32, wparam, lparam uintptr) uintptr {
 }
 
 func createControls(hwnd uintptr) {
+	startupMark("controls_begin")
 	app.font = createFont("Microsoft YaHei UI", 18, 400)
 	app.title = label(hwnd, "L4D2 组服务器过滤器", 24, 18, 360, 28)
 	app.subtitle = label(hwnd, "编辑规则、启动游戏并注入组服务器过滤核心。", 24, 48, 760, 24)

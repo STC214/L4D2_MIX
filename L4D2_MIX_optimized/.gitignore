@@ -47,3 +47,6 @@ Desktop.ini
 .vscode/
 *.user
 *.suo
+
+# Generated after payload builds
+/payload/startup-manifest.json

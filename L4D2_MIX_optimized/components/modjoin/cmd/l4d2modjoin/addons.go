@@ -735,11 +735,12 @@ func detectAddonsDir() string {
 		`C:\Program Files (x86)\Steam\steamapps\common\Left 4 Dead 2\left4dead2\addons`,
 		`C:\Program Files\Steam\steamapps\common\Left 4 Dead 2\left4dead2\addons`,
 	}
-	for drive := 'C'; drive <= 'Z'; drive++ {
+	for _, drive := range startupFixedDrives() {
 		candidates = append(candidates,
-			fmt.Sprintf(`%c:\SteamLibrary\steamapps\common\Left 4 Dead 2\left4dead2\addons`, drive),
-			fmt.Sprintf(`%c:\Program Files (x86)\Steam\steamapps\common\Left 4 Dead 2\left4dead2\addons`, drive))
+			drive+`SteamLibrary\steamapps\common\Left 4 Dead 2\left4dead2\addons`,
+			drive+`Program Files (x86)\Steam\steamapps\common\Left 4 Dead 2\left4dead2\addons`)
 	}
+
 	for _, candidate := range candidates {
 		if info, err := os.Stat(candidate); err == nil && info.IsDir() {
 			return candidate

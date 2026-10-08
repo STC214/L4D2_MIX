@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -43,12 +42,13 @@ const (
 	WM_RBUTTONUP      = 0x0205
 	WM_APP            = 0x8000
 
-	WM_APP_CHILD_READY = WM_APP + 1
-	WM_APP_STATUS      = WM_APP + 2
-	WM_TRAY_ICON       = WM_APP + 3
-	WM_APP_CLOSE_READY = WM_APP + 4
-	WM_MIX_CAN_CLOSE   = 0x80F0
-	WM_MIX_ACTIVATE    = 0x80F1
+	WM_APP_CHILD_READY  = WM_APP + 1
+	WM_APP_STATUS       = WM_APP + 2
+	WM_TRAY_ICON        = WM_APP + 3
+	WM_APP_CLOSE_READY  = WM_APP + 4
+	WM_APP_CHILD_FAILED = WM_APP + 5
+	WM_MIX_CAN_CLOSE    = 0x80F0
+	WM_MIX_ACTIVATE     = 0x80F1
 
 	SC_MINIMIZE    = 0xF020
 	SIZE_MINIMIZED = 1
@@ -250,9 +250,11 @@ type appState struct {
 	closing                                                      bool
 }
 
+var loadingLabels [3]uintptr
 var app appState
 
 func main() {
+	startupMark("main")
 	runtime.LockOSThread()
 	if !isAdmin() {
 		relaunchAsAdmin()
@@ -352,6 +354,7 @@ func runUI() {
 	procSendMessageW.Call(hwnd, WM_SETICON, ICON_SMALL, app.iconSmall)
 	procShowWindow.Call(hwnd, SW_MAXIMIZE)
 	procUpdateWindow.Call(hwnd)
+	startupMark("host_first_paint")
 
 	var m msg
 	for {
@@ -367,6 +370,7 @@ func runUI() {
 func wndProc(hwnd uintptr, message uint32, wParam, lParam uintptr) uintptr {
 	switch message {
 	case WM_CREATE:
+		app.children = [3]childApp{{name: "连跳辅助"}, {name: "组服务器过滤器"}, {name: "MOD 分类合并"}}
 		app.hwnd = hwnd
 		createControls(hwnd)
 		layout(hwnd)
@@ -406,6 +410,24 @@ func wndProc(hwnd uintptr, message uint32, wParam, lParam uintptr) uintptr {
 	case WM_APP_CHILD_READY:
 		attachChild(int(wParam), lParam)
 		return 0
+	case WM_APP_CHILD_FAILED:
+		index := int(wParam)
+		if index >= 0 && index < len(app.children) {
+			app.mu.Lock()
+			name, err := app.children[index].name, app.children[index].err
+			app.mu.Unlock()
+			if err != nil {
+				text := name + "加载失败：" + err.Error()
+				procSetWindowTextW.Call(loadingLabels[index], uintptr(unsafe.Pointer(utf16(text))))
+				if index == app.current {
+					procShowWindow.Call(loadingLabels[index], SW_SHOW)
+				}
+				if index == app.current {
+					setStatus(text)
+				}
+			}
+		}
+		return 0
 	case WM_APP_STATUS:
 		drainStatus()
 		return 0
@@ -435,6 +457,11 @@ func wndProc(hwnd uintptr, message uint32, wParam, lParam uintptr) uintptr {
 		}
 		for _, host := range app.pageHosts {
 			if lParam == host {
+				return app.contentBrush
+			}
+		}
+		for _, label := range loadingLabels {
+			if lParam == label {
 				return app.contentBrush
 			}
 		}
@@ -468,6 +495,10 @@ func createControls(hwnd uintptr) {
 	app.pageHosts[0] = child("STATIC", "", SS_LEFT|WS_CLIPCHILDREN|WS_CLIPSIBLINGS, 0, 0, 1040, 700, app.content, 0)
 	app.pageHosts[1] = child("STATIC", "", SS_LEFT|WS_CLIPCHILDREN|WS_CLIPSIBLINGS, 0, 0, 1040, 700, app.content, 0)
 	app.pageHosts[2] = child("STATIC", "", SS_LEFT|WS_CLIPCHILDREN|WS_CLIPSIBLINGS, 0, 0, 1040, 700, app.content, 0)
+	for i := range app.pageHosts {
+		loadingLabels[i] = child("STATIC", "正在加载"+app.children[i].name+"…", SS_LEFT, 280, 138, 760, 40, hwnd, 0)
+		setFont(loadingLabels[i], app.font)
+	}
 	app.bhopBtn = child("BUTTON", "连跳辅助", BS_OWNERDRAW|WS_TABSTOP, 20, 130, 192, 56, hwnd, ID_PAGE_BHOP)
 	app.filterBtn = child("BUTTON", "组服务器过滤", BS_OWNERDRAW|WS_TABSTOP, 20, 198, 192, 56, hwnd, ID_PAGE_FILTER)
 	app.modsBtn = child("BUTTON", "MOD 分类合并", BS_OWNERDRAW|WS_TABSTOP, 20, 266, 192, 56, hwnd, ID_PAGE_MODS)
@@ -487,6 +518,9 @@ func layout(hwnd uintptr) {
 	move(app.filterBtn, 20, 198, 192, 56)
 	move(app.modsBtn, 20, 266, 192, 56)
 	move(app.content, 248, 106, w-276, h-128)
+	for _, label := range loadingLabels {
+		move(label, 280, 138, w-340, 40)
+	}
 	for _, host := range app.pageHosts {
 		move(host, 0, 0, w-276, h-128)
 	}
@@ -534,8 +568,18 @@ func setPage(index int) {
 	app.mu.Lock()
 	ready := app.children[index].ready
 	name := app.children[index].name
+	childErr := app.children[index].err
 	app.mu.Unlock()
-	if ready {
+	for i, label := range loadingLabels {
+		if i == index && !ready {
+			procSetWindowPos.Call(label, 0, 0, 0, 0, 0, 0x0001|0x0002|SWP_SHOWWINDOW)
+		} else {
+			procShowWindow.Call(label, SW_HIDE)
+		}
+	}
+	if childErr != nil {
+		setStatus(name + "加载失败：" + childErr.Error())
+	} else if ready {
 		setStatus(name + "已就绪")
 	} else {
 		setStatus("正在加载" + name + "…")
@@ -543,29 +587,69 @@ func setPage(index int) {
 }
 
 func prepareAndLaunchChildren() {
-	root, err := extractPayload()
+	startupMark("prepare_begin")
+	root, err := extractPayloadGroup(true)
 	if err != nil {
-		setStatusAsync("组件释放失败：" + err.Error())
+		setChildError(0, err)
+	}
+	app.mu.Lock()
+	for i, exe := range []string{"L4D2AutobhopVPKW.exe", "L4D2RowFilterManager.exe", "L4D2ModJoin.exe"} {
+		app.children[i].exe = filepath.Join(root, exe)
+	}
+	closing := app.closing
+	app.mu.Unlock()
+	if closing {
 		return
 	}
-	importSummary := importLegacyModJoinState(filepath.Join(mainExeDir(), "data", "mod-join"))
+	type preparationResult struct {
+		err     error
+		summary string
+	}
+	prepared := make(chan preparationResult, 1)
+	var prepareOnce sync.Once
+	prepareRemaining := func() {
+		prepareOnce.Do(func() {
+			go func() {
+				_, err := extractPayloadGroup(false)
+				summary := ""
+				if err == nil {
+					startupMark("remaining_payload_ready")
+					summary = importLegacyModJoinState(filepath.Join(mainExeDir(), "data", "mod-join"))
+				}
+				prepared <- preparationResult{err: err, summary: summary}
+			}()
+		})
+	}
+	if err == nil {
+		startupMark("priority_payload_ready")
+		// Launch the default loader first, then overlap remaining disk work
+		// with its initialization; don't serialize both waits.
+		launchChild(0, prepareRemaining)
+	}
+	prepareRemaining() // Also run if default extraction/process creation failed.
 	app.mu.Lock()
-	app.children[0] = childApp{name: "连跳辅助", exe: filepath.Join(root, "L4D2AutobhopVPKW.exe")}
-	app.children[1] = childApp{name: "组服务器过滤器", exe: filepath.Join(root, "L4D2RowFilterManager.exe")}
-	app.children[2] = childApp{name: "MOD 分类合并", exe: filepath.Join(root, "L4D2ModJoin.exe")}
+	closing = app.closing
 	app.mu.Unlock()
-	if importSummary != "" {
-		setStatusAsync(importSummary)
+	if closing {
+		return
 	}
-	setStatusAsync("内置组件已准备，正在打开三个功能页…")
-	for i := range app.children {
-		go launchChild(i)
+	result := <-prepared
+	if result.err != nil {
+		setChildError(1, result.err)
+		setChildError(2, result.err)
+		return
 	}
+	if result.summary != "" {
+		setStatusAsync(result.summary)
+	}
+	for i := 1; i < len(app.children); i++ {
+		go launchChild(i, nil)
+	}
+
 }
 
-func launchChild(index int) {
+func launchChild(index int, afterStart func()) {
 	app.mu.Lock()
-	name := app.children[index].name
 	exe := app.children[index].exe
 	parent := app.pageHosts[index]
 	if app.closing {
@@ -574,10 +658,12 @@ func launchChild(index int) {
 	}
 	app.mu.Unlock()
 
+	startupMark(fmt.Sprintf("child_%d_start_begin", index))
 	cmd := exec.Command(exe)
 	cmd.Dir = filepath.Dir(exe)
 	cmd.Env = append(
 		os.Environ(),
+		"L4D2_MIX_START_NS="+strconv.FormatInt(startupOrigin.UnixNano(), 10),
 		"L4D2_MIX_PARENT="+strconv.FormatUint(uint64(parent), 10),
 		"L4D2_MIX_DATA_ROOT="+mainExeDir(),
 		"L4D2_MIX_ROW_FILTER_DIR="+filepath.Join(mainExeDir(), "data", "row-filter"),
@@ -586,12 +672,10 @@ func launchChild(index int) {
 	)
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 	if err := cmd.Start(); err != nil {
-		app.mu.Lock()
-		app.children[index].err = err
-		app.mu.Unlock()
-		setStatusAsync(name + "启动失败：" + err.Error())
+		setChildError(index, err)
 		return
 	}
+	startupMark(fmt.Sprintf("child_%d_process_started", index))
 	done := make(chan struct{})
 	app.mu.Lock()
 	if app.closing {
@@ -603,6 +687,9 @@ func launchChild(index int) {
 	app.children[index].process = cmd.Process
 	app.children[index].done = done
 	app.mu.Unlock()
+	if afterStart != nil {
+		afterStart()
+	}
 	go func() {
 		_ = cmd.Wait()
 		app.mu.Lock()
@@ -611,22 +698,37 @@ func launchChild(index int) {
 			app.children[index].hwnd = 0
 			app.children[index].ready = false
 		}
+		closing := app.closing
 		close(done)
 		app.mu.Unlock()
+		if !closing {
+			setChildError(index, errors.New("组件进程已退出"))
+		}
 	}()
-	hwnd := waitForProcessWindow(parent, uint32(cmd.Process.Pid), 20*time.Second)
+	hwnd := waitForProcessWindow(parent, uint32(cmd.Process.Pid), 20*time.Second, done)
 	if hwnd == 0 {
+		app.mu.Lock()
+		closing := app.closing
+		app.mu.Unlock()
+		if closing {
+			return
+		}
+		failure := errors.New("等待初始化完成超时")
+		select {
+		case <-done:
+			failure = errors.New("进程在初始化完成前退出")
+		default:
+		}
 		_ = cmd.Process.Kill()
 		select {
 		case <-done:
 		case <-time.After(2 * time.Second):
 		}
-		app.mu.Lock()
-		app.children[index].err = errors.New("等待窗口超时")
-		app.mu.Unlock()
-		setStatusAsync(name + "启动失败：等待窗口超时")
+		setChildError(index, failure)
 		return
 	}
+
+	startupMark(fmt.Sprintf("child_%d_ready", index))
 	procPostMessageW.Call(app.hwnd, WM_APP_CHILD_READY, uintptr(index), hwnd)
 }
 
@@ -794,12 +896,19 @@ func attachChild(index int, hwnd uintptr) {
 		procPostMessageW.Call(hwnd, WM_CLOSE, 0, 0)
 		return
 	}
+	if app.children[index].process == nil {
+		app.mu.Unlock()
+		return
+	}
 	app.children[index].hwnd = hwnd
 	app.children[index].ready = true
 	app.children[index].enabledBeforeHide = true
 	app.mu.Unlock()
+	procShowWindow.Call(loadingLabels[index], SW_HIDE)
 	layout(app.hwnd)
 	setPage(app.current)
+	user32.NewProc("SetPropW").Call(hwnd, uintptr(unsafe.Pointer(utf16("L4D2MixAttached"))), 1)
+	startupMark(fmt.Sprintf("child_%d_attached", index))
 }
 
 func deactivatePage(index int) {
@@ -870,24 +979,44 @@ func activatePage(index int, width, height int32) {
 	}
 }
 
-func waitForProcessWindow(parent uintptr, pid uint32, timeout time.Duration) uintptr {
+func waitForProcessWindow(parent uintptr, pid uint32, timeout time.Duration, done <-chan struct{}) uintptr {
 	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		var found uintptr
-		callback := syscall.NewCallback(func(hwnd, _ uintptr) uintptr {
-			var windowPID uint32
-			procGetWindowThreadProcessId.Call(hwnd, uintptr(unsafe.Pointer(&windowPID)))
-			if windowPID == pid {
+	var found uintptr
+	getParent := user32.NewProc("GetParent")
+	getProp := user32.NewProc("GetPropW")
+	readyName := utf16("L4D2MixReady")
+	// Allocate one callback per launch, not one permanent Go callback every poll.
+	callback := syscall.NewCallback(func(hwnd, _ uintptr) uintptr {
+		var windowPID uint32
+		procGetWindowThreadProcessId.Call(hwnd, uintptr(unsafe.Pointer(&windowPID)))
+		owner, _, _ := getParent.Call(hwnd)
+		if windowPID == pid && owner == parent {
+			ready, _, _ := getProp.Call(hwnd, uintptr(unsafe.Pointer(readyName)))
+			if ready != 0 {
 				found = hwnd
 				return 0
 			}
-			return 1
-		})
+		}
+		return 1
+	})
+	for time.Now().Before(deadline) {
+		select {
+		case <-done:
+			return 0
+		default:
+		}
+		app.mu.Lock()
+		closing := app.closing
+		app.mu.Unlock()
+		if closing {
+			return 0
+		}
+		found = 0
 		procEnumChildWindows.Call(parent, callback, 0)
 		if found != 0 {
 			return found
 		}
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(10 * time.Millisecond)
 	}
 	return 0
 }
@@ -956,60 +1085,6 @@ func requestClose() {
 		}
 		procPostMessageW.Call(app.hwnd, WM_APP_CLOSE_READY, 0, 0)
 	}()
-}
-
-func extractPayload() (string, error) {
-	base := os.Getenv("LOCALAPPDATA")
-	if base == "" {
-		var err error
-		base, err = os.UserCacheDir()
-		if err != nil {
-			return "", err
-		}
-	}
-	root := filepath.Join(base, "L4D2_MIX")
-	dataRoot := filepath.Join(mainExeDir(), "data")
-	mutable := map[string]bool{
-		"runtime/matchmaking_row_filter_dll/blocked_keywords.txt":            true,
-		"runtime/matchmaking_row_filter_dll/blocked_connectstrings.txt":      true,
-		"runtime/matchmaking_row_filter_dll/learned_connectstrings.txt":      true,
-		"runtime/matchmaking_row_filter_dll/auto_derived_connectstrings.txt": true,
-		"runtime/matchmaking_row_filter_dll/row_filter_mode.txt":             true,
-		"runtime/matchmaking_row_filter_dll/matchmaking_row_filter.log":      true,
-	}
-	err := fs.WalkDir(payload, "payload", func(path string, entry fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		rel, err := filepath.Rel("payload", path)
-		if err != nil || rel == "." {
-			return err
-		}
-		rel = filepath.ToSlash(rel)
-		target := payloadTarget(root, dataRoot, rel)
-		if entry.IsDir() {
-			return os.MkdirAll(target, 0755)
-		}
-		data, err := payload.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		if mutable[rel] {
-			if _, err := os.Stat(target); err == nil {
-				return nil
-			}
-		} else if sameFileContent(target, data) {
-			return nil
-		}
-		if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
-			return err
-		}
-		if err := writeFileAtomic(target, data); err != nil {
-			return err
-		}
-		return nil
-	})
-	return root, err
 }
 
 func replaceFile(source, destination string) error {
@@ -1422,4 +1497,14 @@ func rgb(r, g, b byte) uint32 {
 func utf16(s string) *uint16 {
 	p, _ := syscall.UTF16PtrFromString(strings.ReplaceAll(s, "\x00", ""))
 	return p
+}
+
+func setChildError(index int, err error) {
+	app.mu.Lock()
+	app.children[index].err = err
+	closing := app.closing
+	app.mu.Unlock()
+	if !closing {
+		procPostMessageW.Call(app.hwnd, WM_APP_CHILD_FAILED, uintptr(index), 0)
+	}
 }

@@ -189,3 +189,28 @@ dist\L4D2_MIX.exe
 ## 风险提示
 
 连跳页会只读游戏进程内存并模拟按键；过滤器页会把本项目携带的 DLL 注入本机 L4D2。请仅在你拥有和信任的本机环境中使用，并自行遵守服务器、平台和社区规则。
+
+
+## 启动性能与诊断
+
+- 默认连跳页优先释放和启动，之后才准备其他页面；其余页面仍在后台自动启动，标签切换不改变任务生命周期。
+- 页面完成初始化后设置 `L4D2MixReady`，宿主只接入带此标记的直接子窗口。页面加载失败或进程退出时显示明确错误，而非永久空白。
+- 构建自动生成 `payload/startup-manifest.json`。同一版本的固定组件在 24 小时内使用大小/修改时间缓存；文件缺失、大小/时间变化、版本变化、缓存损坏或到期时重新校验 SHA-256 并修复。可编辑规则不覆盖。
+- 元数据缓存不是逐次完整性校验：同大小、同修改时间的改动在缓存期内可能延迟发现。需要每次完整校验时，设置 `L4D2_MIX_VERIFY_PAYLOAD=1`。
+- MOD 页先创建控件，后台迁移状态并读取保存配置；保存过的游戏路径直接使用，首次自动检测只探测本地固定磁盘，跳过网络盘和可移动盘。初始化期间禁用相关操作，完成后恢复。
+- 日常启动不写性能日志。设置 `L4D2_MIX_TRACE_STARTUP=1` 后，日志保存在 EXE 同级的 `data/startup-traces/*.jsonl`，包含各进程的初始化、宿主接入和首次绘制耗时。计时脚本也覆盖进入 Go `main` 前的进程创建等待。
+
+```powershell
+# 构建、测试并生成不含个人 data 的便携 ZIP
+.\package-portable.ps1
+
+# 在独立数据/组件缓存中测量首次释放与后续启动
+.\scripts\measure-startup.ps1 -Exe .\dist\L4D2_MIX.exe `
+  -FixtureRoot .\.tmp\startup-benchmark -OutputPath .\.tmp\startup-results.json -Runs 6 -RequireReady
+
+# 启动中关闭、页面切换、托盘恢复、子进程退出验证
+.\scripts\verify-startup-lifecycle.ps1 -Exe .\dist\L4D2_MIX.exe `
+  -FixtureRoot .\.tmp\lifecycle-fixture -OutputDir .\.tmp\lifecycle-results
+```
+
+首次释放组件缓存不等于操作系统冷启动。磁盘、系统负载及进入程序前的 EXE 扫描会影响测量；不要从一次测量推断固定加速比例。
