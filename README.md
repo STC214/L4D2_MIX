@@ -1,15 +1,12 @@
 # L4D2 MIX
 
-[GitHub 仓库](https://github.com/STC214/L4D2_MIX) · [优化版完整说明](L4D2_MIX_optimized/README.md)
+[GitHub 仓库](https://github.com/STC214/L4D2_MIX)
 
-文档更新：2026-10-08（Asia/Shanghai）。根目录已同步优化版的启动优化、组件缓存、深色首帧及后续修复。现在推荐从根目录开发和构建；`L4D2_MIX_optimized` 保留同步的软件副本。
+文档更新：2026-10-08（Asia/Shanghai）。仓库只维护根目录这一套实现，已包含启动优化、组件缓存、深色首帧及后续修复。原同步副本已合并，开发、测试和打包均在根目录执行。
 
-| 实现 | 启动路径（相对仓库根目录） | 构建入口 |
-| --- | --- | --- |
-| 优化版同步副本 | `L4D2_MIX_optimized/dist/L4D2_MIX.exe` | 进入 `L4D2_MIX_optimized` 后运行 `package-portable.ps1` |
-| 根目录（推荐，已同步优化） | `dist/L4D2_MIX.exe` | 在仓库根目录运行 `package-portable.ps1` |
-
-两版 EXE 文件名相同，请核对实际运行路径。两处的软件实现和构建流程保持一致；各自 EXE 同级 data 独立，运行时文档因所在目录有少量差异。
+- 主程序：`dist/L4D2_MIX.exe`
+- 便携包：`dist/L4D2_MIX-portable.zip`
+- 构建入口：`package-portable.ps1`
 
 一个统一的 Go + Win32 控制台，将以下三个现有工具放进同一个窗口：
 
@@ -27,16 +24,13 @@ dist\L4D2_MIX.exe
 
 程序会请求管理员权限。左侧按钮用于切换三个完整功能页。最小化隐藏至系统托盘：单击/双击恢复，右击打开托盘菜单。恢复时宿主重新布局并重绘当前嵌入窗口，不重启组件或后台任务。
 
-## 优化版子项目
+## 外观与唯一维护入口
 
-`L4D2_MIX_optimized` 是独立构建的同步副本，不是根目录运行时加载的插件，也不是便携包目录。根目录已同步其 UI、启动调度、固定组件缓存、首帧深色绘制、诊断和 ZIP 流程；继续迭代优先在根目录修改，再同步到该子目录。以下命令可单独构建副本：
+主窗口、独立组件窗口和 MOD 冲突处理弹窗启用深色标题栏；左侧标签页按功能使用青色、绿色、紫色区分。各功能页和弹窗按钮按动作类型统一配色。
 
-```powershell
-cd .\L4D2_MIX_optimized
-.\package-portable.ps1
-```
+源码入口为根目录宿主以及 `components/autobhop`、`components/rowfilter`、`components/modjoin` 三个独立 Go 模块。根目录的 `go test ./...` 不会自动测试嵌套模块；使用后台验证脚本覆盖四模块。
 
-优化版主窗口、独立组件窗口和 MOD 冲突处理弹窗会启用深色标题栏；左侧标签页按功能使用青色、绿色、紫色区分；各功能页和弹窗按钮按动作类型统一配色，例如启动、注入、部署和确认偏绿，刷新、检测、浏览和扫描偏蓝，停止和取消偏红，恢复默认和还原偏橙。
+旧副本的 EXE 同级数据保留于 `maintenance/local-records/2026-10-08/legacy-runtime/dist/data`。它不自动覆盖当前 `dist/data`；需要旧配置时逐项核对后导入。审查与回滚材料也保留在 `maintenance/local-records`，仅在本机保留。
 
 ## 标签页切换与后台任务
 
@@ -155,19 +149,19 @@ F:\Project\03_Game_Tools\L4D2_MOD_JOIN\dist\data
 - 导入结果记录在 `data\mod-join\legacy-import-v1.json`。
 - 导入只复制文件，不删除或修改独立版目录。
 
-## 启动、发布与文档导航（两处实现一致）
+## 启动、发布与文档导航
 
 - 默认连跳组件先校验/释放并创建进程；其他载荷准备与旧 MOD 状态导入和连跳初始化重叠，默认页初始化完成后再创建其他页面进程。默认页优先可能让非当前页稍晚就绪，不保证所有页面同时变快。
 - 子页面设置 `L4D2MixReady`，宿主检查进程 ID、直接父窗口和该标记；接入并布局后设置 `L4D2MixAttached`。加载和进程退出显示明确状态。
 - 固定组件按构建清单缓存：24 小时内大小/修改时间一致时跳过重复读取；版本、元数据变化、缺失、缓存损坏或过期触发 SHA-256 校验与修复。相同大小和修改时间的变动可能延迟发现，设置 `L4D2_MIX_VERIFY_PAYLOAD=1` 可每次完整校验。已有可编辑规则、模式、日志保留。
 - 宿主采用专用深色容器与显式背景绘制，创建时采用最大化布局；子页先调整尺寸，再显示并同步首次重绘，MOD 窗口类也使用深色背景刷。
 - 设置 `L4D2_MIX_TRACE_STARTUP=1` 后，启动阶段日志追加至 EXE 同级 `data/startup-traces/*.jsonl`；平时不写性能日志。
-- 两处构建均输出 `dist/L4D2_MIX.exe`、`dist/L4D2_MIX-portable.zip` 和 `.zip.sha256`。ZIP 只含 EXE 和 README.txt，不含个人 data。产物不由 Git 跟踪，推送源码不等于发布 Release 附件。
+- 构建输出 `dist/L4D2_MIX.exe`、`dist/L4D2_MIX-portable.zip` 和 `.zip.sha256`。ZIP 只含 EXE 和 README.txt，不含个人 data。产物不由 Git 跟踪，推送源码不等于发布 Release 附件。
 - 当前发布宿主为 x64，预构建 Loader/DLL 为 x86。宿主与连跳模块要求 Go 1.26；Windows 构建需将 go 和 windres.exe 放入 PATH。
 
-[优化版使用与验证](L4D2_MIX_optimized/README.md) · [优化版 Loader](L4D2_MIX_optimized/payload/runtime/matchmaking_probe_loader/README.md) · [优化版过滤器](L4D2_MIX_optimized/payload/runtime/matchmaking_row_filter_dll/README.md) · [原版 Loader](payload/runtime/matchmaking_probe_loader/README.md) · [原版过滤器](payload/runtime/matchmaking_row_filter_dll/README.md)
+[Loader 运行说明](payload/runtime/matchmaking_probe_loader/README.md) · [过滤器运行说明](payload/runtime/matchmaking_row_filter_dll/README.md)
 
-首次释放组件缓存不等于操作系统冷启动。本轮后台验证覆盖不可见窗口的背景像素、组件身份与消息超时、缓存、文件处理、竞态、构建与 ZIP。标签切换、启动中关闭、托盘恢复及桌面合成首帧属于可见 UI 验证，本轮未执行，不保证任意机器的固定启动时间或每个桌面合成帧。完整 `go vet` 在每处实现的四个模块合计报告 6 处既有 Win32 lParam 原生指针转换提示（宿主 2、连跳 1、过滤器 1、MOD 2）；这些是消息 ABI 边界，未通过隐藏指针转换来消除提示。后台脚本保留完整诊断，逐条核对已审查的转换，并额外执行 `go vet -unsafeptr=false ./...`；不代表完整 vet 零提示。
+首次释放组件缓存不等于操作系统冷启动。本轮后台验证覆盖不可见窗口的背景像素、组件身份与消息超时、缓存、文件处理、竞态、构建与 ZIP。标签切换、启动中关闭、托盘恢复及桌面合成首帧属于可见 UI 验证，本轮未执行，不保证任意机器的固定启动时间或每个桌面合成帧。完整 `go vet` 在四个模块合计报告 6 处既有 Win32 lParam 原生指针转换提示（宿主 2、连跳 1、过滤器 1、MOD 2）；这些是消息 ABI 边界，未通过隐藏指针转换来消除提示。后台脚本保留完整诊断，逐条核对已审查的转换，并额外执行 `go vet -unsafeptr=false ./...`；不代表完整 vet 零提示。
 
 ## 图标资源
 
@@ -196,7 +190,7 @@ dist\L4D2_MIX-portable.zip.sha256
 
 过滤器 Loader、DLL、脚本和默认配置已纳入本项目的 `payload\runtime`。构建脚本不会再访问其他项目的绝对路径，因此当前项目可以独立构建。
 
-Loader/DLL 使用预构建文件，其独立源码和编译脚本未包含在本仓库。根目录与副本均生成 EXE、便携 ZIP 和 SHA-256 校验文件。升级前备份并保留 data；公开分发排除个人路径、规则和部署记录。MOD 的一键还原不回滚应用版本。
+Loader/DLL 使用预构建文件，其独立源码和编译脚本未包含在本仓库。构建生成 EXE、便携 ZIP 和 SHA-256 校验文件。升级前备份并保留 data；公开分发排除个人路径、规则和部署记录。MOD 的一键还原不回滚应用版本。
 
 构建脚本会检查每个原生命令的退出码。任一组件测试、组件构建、资源编译或宿主构建失败时会立即终止，不会继续使用旧载荷生成看似成功的 EXE。
 
@@ -222,10 +216,71 @@ Loader/DLL 使用预构建文件，其独立源码和编译脚本未包含在本
 .\scripts\verify-background.ps1 -Build -Rounds 2
 ```
 
-根目录执行时覆盖根目录与优化副本的四个 Go 模块，检查软件副本一致性、普通测试、重复竞态测试、完整 vet 已审查 ABI 提示、其他静态分析、gofmt，以及 ZIP 条目与 SHA-256。命令、工作目录、原始 stdout/stderr、退出码及产物哈希记录在 `.tmp/background-verification.json`。在副本执行时仅检查副本。失败立即终止并写出失败记录。
+覆盖根目录宿主及三个组件模块，检查项目布局、普通测试、重复竞态测试、完整 vet 已审查 ABI 提示、其他静态分析、gofmt，以及 ZIP 条目与 SHA-256。命令、工作目录、原始 stdout/stderr、退出码及产物哈希记录在 `.tmp/background-verification.json`。失败立即终止并写出失败记录。
 
 默认不启动应用、游戏、注入脚本或可见 UI 验证；原生窗口测试只创建不可见 HWND 和离屏位图。不要传 `package-portable.ps1 -VerifyUI`，也不要调用其他 UI/启动测量脚本来进行纯后台验证。真实首帧合成效果和游戏集成需要另行实机验证。
 
 本轮修复包括：关闭检查采用有界跨进程消息（超时保持任务运行）、激活通知异步投递、接入前重新核对 HWND/PID/父窗口/Ready、连跳工作线程退出后再释放所有权、重复枚举复用原生回调、日志尾读按快照长度限流、VPK 读取先校验范围、合并第二遍读取核对长度/CRC，以及所有计划路径预检以防输出越界或覆盖输入。构建脚本恢复调用方 GOCACHE/GOTMPDIR，并禁用测试缓存。
 
 “后台审查无新增可修复问题”不等于对所有机器、输入和桌面帧的绝对无缺陷保证；Loader/DLL 为预构建组件，本仓库没有它们的源码。
+
+## 启动性能与诊断
+
+- 默认连跳页先释放并创建进程；其他载荷准备与旧 MOD 状态导入和连跳初始化重叠，默认页初始化完成后再创建其他页面进程。其余页面自动启动，不是点击标签才加载。默认页优先可能使非当前页稍晚就绪。
+- 页面完成初始化后设置 `L4D2MixReady`，宿主检查进程 ID、直接父窗口和就绪标记；接入并布局后设置 `L4D2MixAttached`。计时脚本同时检查两个标记。加载失败或进程退出显示明确错误。
+- 构建自动生成 `payload/startup-manifest.json`。同一版本的固定组件在 24 小时内使用大小/修改时间缓存；文件缺失、大小/时间变化、版本变化、缓存损坏或到期时重新校验 SHA-256 并修复。可编辑规则不覆盖。
+- 元数据缓存不是逐次完整性校验：同大小、同修改时间的改动在缓存期内可能延迟发现。需要每次完整校验时，设置 `L4D2_MIX_VERIFY_PAYLOAD=1`。
+- MOD 页先创建控件，后台迁移状态并读取配置；保存过的路径直接使用，不在启动时重新验证可访问性。首次检测只探测本地固定磁盘；已有网络盘路径保留。初始化期间禁用相关操作，完成后恢复。
+- 日常启动不写性能日志。设置 `L4D2_MIX_TRACE_STARTUP=1` 后，日志按 EXE 名追加至 EXE 同级 `data/startup-traces/*.jsonl`，记录 session、pid、phase、ms，覆盖初始化、接入和首次绘制。隐藏页可能首次显示时才记录 first_paint。计时脚本也计入进入 Go main 前的进程创建等待。
+
+```powershell
+# 构建、测试并生成不含个人 data 的便携 ZIP
+.\package-portable.ps1
+
+# 在独立数据/组件缓存中测量首次释放与后续启动
+.\scripts\measure-startup.ps1 -Exe .\dist\L4D2_MIX.exe `
+  -FixtureRoot .\.tmp\startup-benchmark -OutputPath .\.tmp\startup-results.json -Runs 6 -RequireReady
+
+# 启动中关闭、页面切换、托盘恢复、子进程退出验证
+.\scripts\verify-startup-lifecycle.ps1 -Exe .\dist\L4D2_MIX.exe `
+  -FixtureRoot .\.tmp\lifecycle-fixture -OutputDir .\.tmp\lifecycle-results
+```
+
+首次释放组件缓存不等于操作系统冷启动。磁盘、系统负载及进入程序前的 EXE 扫描会影响测量；不要从一次测量推断固定加速比例。
+
+
+### 首帧闪白修复
+
+宿主的侧栏、内容区和页面容器使用专门的深色窗口类，不再依赖嵌套 `STATIC` 控件的系统默认背景。宿主处理 `WM_PAINT`/`WM_ERASEBKGND`，创建时即使用最大化布局；子页面先调整尺寸，再显示并同步完成首次重绘。MOD 窗口类也使用真实深色背景刷，避免首帧露出系统白色背景。
+
+## 测试、验证边界与问题定位
+
+先执行打包脚本生成 Go 界面组件和载荷清单，再测试。宿主和三个组件是独立 Go 模块；宿主的 `go test ./...` 不会自动测试嵌套模块。
+
+```powershell
+foreach ($module in @('.', 'components/autobhop', 'components/rowfilter', 'components/modjoin')) {
+    Push-Location $module
+    try {
+        go test -race ./...
+        if ($LASTEXITCODE -ne 0) { throw "Tests failed: $module" }
+        go vet -unsafeptr=false ./...
+        if ($LASTEXITCODE -ne 0) { throw "Static checks failed: $module" }
+    } finally { Pop-Location }
+}
+
+# 宿主的深色背景像素回归
+go test -run TestDarkPanelPaintsDarkInsteadOfSystemWhite -v .
+
+# 与 .zip.sha256 文件第一列核对
+Get-FileHash .\dist\L4D2_MIX-portable.zip -Algorithm SHA256
+```
+
+完整 `go vet` 在四模块合计报告 6 处既有 Win32 回调 lParam 转原生指针提示（宿主 2、连跳 1、过滤器 1、MOD 2）。上面的静态检查明确排除该项，不代表完整 vet 零提示；竞态检测需要支持的平台与 C 工具链。
+
+生命周期脚本使用独立 FixtureRoot，验证六种启动中关闭时机、遗留子进程、30 次标签切换、托盘恢复，并有意终止自己的过滤器测试进程。它会启动管理员窗口，旧 MOD 状态仍可能按程序规则复制到测试目录。不要把 FixtureRoot 指向正在使用的 data 或缓存。`-VerifyUI` 仅验证标签切换，不替代完整生命周期脚本。
+
+启用诊断时，在启动 EXE 的同一 PowerShell 会话中设置 `$env:L4D2_MIX_TRACE_STARTUP = '1'`；结束后清除该变量或关闭该会话。开关只影响后续创建的进程。日志按 EXE 名追加，反馈前区分 session；分享日志时移除个人路径与配置。
+
+首次释放组件缓存不等于系统冷启动。当前验证没有采样每个桌面合成帧；若仍观察到闪白，先确认运行根目录新 EXE，再记录白色区域（整窗、内容区、标题栏）、Windows 版本、录屏和启动日志。不要把完整个人 data 随公开反馈上传。
+
+升级回退应用时使用保留的旧 EXE 或源码版本。MOD 页的“一键还原”只还原游戏部署，不回滚应用程序版本。

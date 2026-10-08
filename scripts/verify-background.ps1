@@ -12,8 +12,6 @@ New-Item -ItemType Directory -Force -Path (Split-Path -Parent $OutputPath) | Out
 $records = [Collections.Generic.List[object]]::new()
 $artifacts = [Collections.Generic.List[object]]::new()
 $trees = @($projectRoot)
-$mirror = Join-Path $projectRoot 'L4D2_MIX_optimized'
-if (Test-Path -LiteralPath (Join-Path $mirror 'go.mod')) { $trees += $mirror }
 $success = $false
 
 function Invoke-HiddenCommand([string]$Directory, [string]$File, [string[]]$Arguments) {
@@ -65,23 +63,12 @@ function Assert-KnownNativePointerDiagnostics($Result, [int]$ExpectedCount) {
     $Result['classification'] = 'reviewed Win32 lParam ABI diagnostics, not zero-warning vet'
 }
 
-function Assert-SoftwareMirror {
-    if ($trees.Count -lt 2) { return }
-    $files = @(Get-ChildItem -LiteralPath $projectRoot -File | Where-Object { $_.Extension -in @('.go','.mod','.sum','.manifest','.rc','.ps1','.ico','.jpg') })
-    $files += @(Get-ChildItem -LiteralPath (Join-Path $projectRoot 'components'),(Join-Path $projectRoot 'scripts') -Recurse -File | Where-Object { $_.Extension -in @('.go','.mod','.sum','.manifest','.syso','.ps1') })
-    foreach ($file in $files) {
-        $relative = $file.FullName.Substring($projectRoot.Length + 1)
-        $other = Join-Path $mirror $relative
-        if (!(Test-Path -LiteralPath $other) -or (Get-FileHash -LiteralPath $file.FullName).Hash -ne (Get-FileHash -LiteralPath $other).Hash) { throw "Software mirror drift: $relative" }
+function Assert-ProjectLayout {
+    foreach ($module in @('', 'components/autobhop', 'components/rowfilter', 'components/modjoin')) {
+        $directory = if ($module) { Join-Path $projectRoot $module } else { $projectRoot }
+        if (!(Test-Path -LiteralPath (Join-Path $directory 'go.mod'))) { throw "Missing project module: $directory" }
     }
-    # Check for files present only in the mirror as well.
-    $otherFiles = @(Get-ChildItem -LiteralPath $mirror -File | Where-Object { $_.Extension -in @('.go','.mod','.sum','.manifest','.rc','.ps1','.ico','.jpg') })
-    $otherFiles += @(Get-ChildItem -LiteralPath (Join-Path $mirror 'components'),(Join-Path $mirror 'scripts') -Recurse -File | Where-Object { $_.Extension -in @('.go','.mod','.sum','.manifest','.syso','.ps1') })
-    foreach ($file in $otherFiles) {
-        $relative = $file.FullName.Substring($mirror.Length + 1)
-        if (!(Test-Path -LiteralPath (Join-Path $projectRoot $relative))) { throw "Mirror-only software file: $relative" }
-    }
-    Write-Host 'Software mirror: identical (runtime user data and scope-specific docs excluded).'
+    Write-Host 'Single project layout: host and three component modules verified.'
 }
 
 function Test-PortableArchive([string]$Tree) {
@@ -135,7 +122,7 @@ function Assert-PayloadManifest([string]$Tree) {
 }
 
 try {
-    Assert-SoftwareMirror
+    Assert-ProjectLayout
     foreach ($tree in $trees) {
         Assert-PowerShellSyntax $tree
         if ($Build) {
@@ -162,7 +149,7 @@ try {
             }
         }
     }
-    Assert-SoftwareMirror
+    Assert-ProjectLayout
     $success = $true
 } finally {
     $report = [ordered]@{success=$success; rounds=$Rounds; visible_ui_started=$false; notes='Hidden HWND tests only. Desktop first-frame compositing and real game integration not exercised.'; commands=@($records.ToArray()); artifacts=@($artifacts.ToArray())}
