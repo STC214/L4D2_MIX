@@ -238,11 +238,12 @@ func main() {
 	iconLarge, _, _ := procLoadImage.Call(instance, 2, 1, 32, 32, 0)
 	iconSmall, _, _ := procLoadImage.Call(instance, 2, 1, 16, 16, 0)
 	registerConflictClass(instance, iconLarge, iconSmall)
+	ui.bgBrush, _, _ = procCreateBrush.Call(0x00241E1B)
 	className := utf16("L4D2ModJoinWindow")
 	wc := wndClassEx{
 		Size: uint32(unsafe.Sizeof(wndClassEx{})), WndProc: syscall.NewCallback(windowProc),
 		Instance: instance, Icon: iconLarge, IconSm: iconSmall,
-		Background: colorWindow + 1, ClassName: className,
+		Background: ui.bgBrush, ClassName: className,
 	}
 	procRegisterClass.Call(uintptr(unsafe.Pointer(&wc)))
 	windowStyle := uintptr(wsOverlapped | wsClipChildren)
@@ -381,7 +382,10 @@ func windowProc(hwnd uintptr, message uint32, wParam, lParam uintptr) uintptr {
 		paintWindow(hwnd)
 		return 0
 	case wmEraseBkgnd:
-		// WM_PAINT draws the complete background through a memory DC.
+		// Seed a dark backing surface even before the first double-buffered paint.
+		var client rect
+		procGetClientRect.Call(hwnd, uintptr(unsafe.Pointer(&client)))
+		procFillRect.Call(wParam, uintptr(unsafe.Pointer(&client)), ui.bgBrush)
 		return 1
 	case wmClose:
 		if ui.busy {
@@ -415,7 +419,6 @@ func windowProc(hwnd uintptr, message uint32, wParam, lParam uintptr) uintptr {
 
 func createUI(hwnd uintptr) {
 	startupMark("controls_begin")
-	ui.bgBrush, _, _ = procCreateBrush.Call(0x00241E1B)
 	ui.fieldBrush, _, _ = procCreateBrush.Call(0x00352E2A)
 	cwd, _ := os.Getwd()
 	base := cwd

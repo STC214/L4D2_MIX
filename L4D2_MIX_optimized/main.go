@@ -53,6 +53,7 @@ const (
 	SC_MINIMIZE    = 0xF020
 	SIZE_MINIMIZED = 1
 
+	WS_MAXIMIZE         = 0x01000000
 	WS_OVERLAPPEDWINDOW = 0x00CF0000
 	WS_VISIBLE          = 0x10000000
 	WS_CHILD            = 0x40000000
@@ -323,6 +324,9 @@ func cleanupTheme() {
 }
 
 func runUI() {
+	if !registerDarkPanelClass() {
+		return
+	}
 	hinst, _, _ := procGetModuleHandleW.Call(0)
 	app.iconBig = loadIcon(hinst, 256)
 	app.iconSmall = loadIcon(hinst, 32)
@@ -344,7 +348,7 @@ func runUI() {
 		0,
 		uintptr(unsafe.Pointer(className)),
 		uintptr(unsafe.Pointer(utf16(appTitle+" - 连跳、服务器过滤与 MOD 合并"))),
-		WS_OVERLAPPEDWINDOW|WS_CLIPCHILDREN,
+		WS_OVERLAPPEDWINDOW|WS_CLIPCHILDREN|WS_MAXIMIZE,
 		80, 55, 1320, 860,
 		0, 0, hinst, 0,
 	)
@@ -443,6 +447,9 @@ func wndProc(hwnd uintptr, message uint32, wParam, lParam uintptr) uintptr {
 			showTrayMenu()
 		}
 		return 0
+	case 0x000F:
+		paintHostWindow(hwnd)
+		return 0
 	case WM_ERASEBKGND:
 		paintChromeBackground(hwnd, wParam)
 		return 1
@@ -490,11 +497,11 @@ func createControls(hwnd uintptr) {
 	app.headerSub = child("STATIC", "连跳辅助 + 组服务器过滤 + MOD 分类合并  /  一站式控制台", SS_LEFT, 28, 57, 760, 26, hwnd, 0)
 	app.status = child("STATIC", "正在准备内置组件…", SS_LEFT, 0, 25, 500, 28, hwnd, 0)
 
-	app.sidebar = child("STATIC", "", SS_LEFT, 0, 96, 232, 700, hwnd, 0)
-	app.content = child("STATIC", "", SS_LEFT|WS_CLIPCHILDREN|WS_CLIPSIBLINGS, 248, 106, 1040, 700, hwnd, 0)
-	app.pageHosts[0] = child("STATIC", "", SS_LEFT|WS_CLIPCHILDREN|WS_CLIPSIBLINGS, 0, 0, 1040, 700, app.content, 0)
-	app.pageHosts[1] = child("STATIC", "", SS_LEFT|WS_CLIPCHILDREN|WS_CLIPSIBLINGS, 0, 0, 1040, 700, app.content, 0)
-	app.pageHosts[2] = child("STATIC", "", SS_LEFT|WS_CLIPCHILDREN|WS_CLIPSIBLINGS, 0, 0, 1040, 700, app.content, 0)
+	app.sidebar = child(darkPanelClass, "", WS_CLIPCHILDREN|WS_CLIPSIBLINGS, 0, 96, 232, 700, hwnd, 0)
+	app.content = child(darkPanelClass, "", SS_LEFT|WS_CLIPCHILDREN|WS_CLIPSIBLINGS, 248, 106, 1040, 700, hwnd, 0)
+	app.pageHosts[0] = child(darkPanelClass, "", SS_LEFT|WS_CLIPCHILDREN|WS_CLIPSIBLINGS, 0, 0, 1040, 700, app.content, 0)
+	app.pageHosts[1] = child(darkPanelClass, "", SS_LEFT|WS_CLIPCHILDREN|WS_CLIPSIBLINGS, 0, 0, 1040, 700, app.content, 0)
+	app.pageHosts[2] = child(darkPanelClass, "", SS_LEFT|WS_CLIPCHILDREN|WS_CLIPSIBLINGS, 0, 0, 1040, 700, app.content, 0)
 	for i := range app.pageHosts {
 		loadingLabels[i] = child("STATIC", "正在加载"+app.children[i].name+"…", SS_LEFT, 280, 138, 760, 40, hwnd, 0)
 		setFont(loadingLabels[i], app.font)
@@ -961,7 +968,7 @@ func activatePage(index int, width, height int32) {
 		0,
 		uintptr(width),
 		uintptr(height),
-		SWP_NOZORDER|SWP_SHOWWINDOW,
+		SWP_NOZORDER,
 	)
 	if !wasActive {
 		if enabledBeforeHide {
@@ -971,6 +978,9 @@ func activatePage(index int, width, height int32) {
 		}
 	}
 	procShowWindow.Call(hwnd, SW_SHOW)
+	if !wasActive {
+		procRedrawWindow.Call(hwnd, 0, 0, RDW_INVALIDATE|RDW_ERASE|RDW_ALLCHILDREN|RDW_UPDATENOW)
+	}
 	app.mu.Lock()
 	app.children[index].active = true
 	app.mu.Unlock()
